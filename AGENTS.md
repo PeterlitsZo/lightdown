@@ -17,3 +17,8 @@ important change (for example, if the project includes both a refactor and a
 documentation update, the subject should describe the refactor rather than the
 documentation update). The subject MUST end with an English full stop, and its
 first letter MUST be capitalized.
+
+## Behavior Rules
+
+- Do not add unit tests unless I explicitly ask for them.
+- English only.
