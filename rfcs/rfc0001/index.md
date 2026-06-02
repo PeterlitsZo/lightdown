@@ -42,16 +42,16 @@ This RFC does not try to solve everything at once.
 The root node is `doc`.
 
 ```lightdown-ir
-(doc
-  (meta :version "0.1.0")
+(doc {:meta {:version "0.1.0"}}
   (h1 "Hello World")
   (p "How do you do?"))
 ```
 
-The first child of `doc` must be a `meta` node. The `meta` node must specify
-the IR version with the `:version` key, whose value is a semantic version.
+The `doc` node must specify document metadata in its attribute map. The
+metadata must contain the IR version with the `:version` key, whose value is a
+semantic version.
 
-All remaining children of `doc` must be block-level elements.
+All children of `doc` must be block-level elements.
 
 ## Textual representation
 
@@ -63,14 +63,12 @@ The textual form of Lightdown IR uses an S-expression-like syntax.
   `(a {:href "https://example.com"} "the example")`.
 - A node that uses an attribute map places that map before child nodes or
   inline text.
-- In version `0.1.0`, attribute map keys are keywords such as `:href`, and
-  attribute map values are strings.
+- In version `0.1.0`, attribute map keys are keywords such as `:href`.
+  Attribute map values are strings, except for the `doc` node's `:meta` value,
+  which is a nested map.
 - Only nodes whose definitions explicitly mention an attribute map may use one.
 - For each node, only the attributes listed in its definition are recognized.
-  Unrecognized attributes must be ignored. An implementation should emit a
-  warning when it encounters them.
-- Some nodes use named arguments directly. For example, `meta` is written as
-  `(meta :version "0.1.0")`.
+  Unrecognized attributes must be rejected.
 - Text is represented as a string.
 - Lightdown IR supports both single-line strings such as `"hello"` and
   multi-line strings delimited by `"""`.
@@ -136,9 +134,6 @@ foo
 
 bar
 ```
-
-The `meta` node in Lightdown IR is a document metadata node. Despite its name,
-it has no relationship to the HTML `<meta>` element.
 
 ## Supported elements
 
@@ -341,8 +336,7 @@ The primary motivation of this IR is straightforward conversion to HTML. The
 mapping rules are intentionally simple:
 
 - `doc` maps to an HTML document fragment, not an HTML element by itself.
-- `meta` carries document-level metadata in the IR. It does not map to the
-  HTML `<meta>` element and does not map directly to any HTML element.
+- `doc` metadata does not map directly to any HTML element.
 - `h1` through `h6` map directly to `<h1>` through `<h6>`.
 - `p`, `ul`, `ol`, `li`, `blockquote`, `hr`, `table`, `thead`, `tbody`, `tr`,
   `th`, `td`, `em`, `strong`, `code`, `a`, `img`, and `br` map directly to
@@ -360,8 +354,9 @@ An implementation should reject invalid IR instead of guessing.
 
 At minimum, the following cases are invalid:
 
-- a `doc` node without a leading `meta` node;
-- a `meta` node without `:version`;
+- a `doc` node without `:meta`;
+- a `doc` node whose `:meta` map does not contain `:version`;
+- a `doc` node whose `:meta` map contains unrecognized entries;
 - a block-level child placed where only inline content is allowed;
 - a `codeblock` node with zero or multiple children;
 - a `codeblock` node whose child is not a text node;
@@ -375,8 +370,7 @@ At minimum, the following cases are invalid:
 The following example shows a small but representative document:
 
 ```lightdown-ir
-(doc
-  (meta :version "0.1.0")
+(doc {:meta {:version "0.1.0"}}
   (h1 "Lightdown")
   (p
     "Lightdown is a markup language for writing documents that can be converted "
