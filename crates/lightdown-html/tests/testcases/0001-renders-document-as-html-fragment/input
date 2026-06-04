@@ -1,0 +1,11 @@
+(doc {:meta {:version "0.1.0"}}
+  (h1 "Lightdown")
+  (p "Read " (a {:href "/guide.html"} "the guide") ".")
+  (ul
+    (li (p "Headings"))
+    (li (p "Code blocks")))
+  (codeblock {:lang "rust"} """
+    | fn main() {
+    |     println!("hello");
+    | }
+    """))

@@ -1,4 +1,3 @@
 [workspace]
-members = ["crates/lightdown-ir"]
+members = ["crates/lightdown-html", "crates/lightdown-ir"]
 resolver = "3"
-

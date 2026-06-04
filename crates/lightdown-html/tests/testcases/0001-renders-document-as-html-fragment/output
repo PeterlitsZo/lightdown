@@ -1,0 +1,5 @@
+001 | <h1>Lightdown</h1><p>Read <a href="/guide.html">the guide</a>.</p><ul><li>
+    | <p>Headings</p></li><li><p>Code blocks</p></li></ul><pre><code class="lang
+    | uage-rust">fn main() {
+002 |     println!(&quot;hello&quot;);
+003 | }</code></pre>

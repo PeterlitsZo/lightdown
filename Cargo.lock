@@ -12,6 +12,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightdown-html"
+version = "0.1.0"
+dependencies = [
+ "lightdown-ir",
+]
+
+[[package]]
 name = "lightdown-ir"
 version = "0.1.0"
 dependencies = [

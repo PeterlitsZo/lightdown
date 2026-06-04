@@ -1,0 +1,2 @@
+(doc {:meta {:version "0.1.0"}}
+  (p "<tag>&" (img {:src "/x?y=1&z=\"2\"" :alt "A \"quote\" & tag"})))
