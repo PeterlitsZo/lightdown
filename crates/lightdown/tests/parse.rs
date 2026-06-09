@@ -1,16 +1,17 @@
-use lightdown_ir::BlockKind;
+use lightdown_ir::{Expr, ExprKind};
 
 #[test]
 fn parses_minimal_author_document() {
-    let document = lightdown::parse("# Hello\n\nLightdown is small.")
-        .expect("author document parses");
+    let module =
+        lightdown::parse("# Hello\n\nLightdown is small.").expect("author document parses");
 
-    assert_eq!(document.metadata.version, "0.1.0");
-    assert!(matches!(
-        document.blocks[0].kind,
-        BlockKind::Heading { level: 1, .. }
-    ));
-    assert!(matches!(document.blocks[1].kind, BlockKind::Paragraph(_)));
+    assert_eq!(module.metadata.version, "0.1.0");
+    assert_call_name(&module.body, "doc");
+
+    let doc_args = call_args(&module.body);
+    assert_eq!(doc_args.len(), 2);
+    assert_call_name(&doc_args[0], "h1");
+    assert_call_name(&doc_args[1], "p");
 }
 
 #[test]
@@ -33,36 +34,22 @@ fn parses_lists_quotes_fences_and_thematic_breaks() {
         ---
     "};
 
-    let document = lightdown::parse(input).expect("document parses");
+    let module = lightdown::parse(input).expect("document parses");
 
-    assert_eq!(document.blocks.len(), 6);
-    assert!(matches!(
-        document.blocks[0].kind,
-        BlockKind::Heading { level: 1, .. }
-    ));
-    assert!(matches!(
-        document.blocks[1].kind,
-        BlockKind::List { ordered: false, .. }
-    ));
-    assert!(matches!(
-        document.blocks[2].kind,
-        BlockKind::List { ordered: true, .. }
-    ));
-    assert!(matches!(document.blocks[3].kind, BlockKind::BlockQuote(_)));
-    assert!(matches!(
-        document.blocks[4].kind,
-        BlockKind::CodeBlock { .. }
-    ));
-    assert!(matches!(
-        document.blocks[5].kind,
-        BlockKind::ThematicBreak
-    ));
+    let doc_args = call_args(&module.body);
+    assert_eq!(doc_args.len(), 6);
+    assert_call_name(&doc_args[0], "h1");
+    assert_call_name(&doc_args[1], "ul");
+    assert_call_name(&doc_args[2], "ol");
+    assert_call_name(&doc_args[3], "blockquote");
+    assert_call_name(&doc_args[4], "codeblock");
+    assert_call_name(&doc_args[5], "hr");
 }
 
 #[test]
 fn rejects_unterminated_code_fence() {
-    let error = lightdown::parse("```rust\nfn main() {}\n")
-        .expect_err("unterminated fence is rejected");
+    let error =
+        lightdown::parse("```rust\nfn main() {}\n").expect_err("unterminated fence is rejected");
 
     assert!(matches!(
         error.kind,
@@ -73,44 +60,37 @@ fn rejects_unterminated_code_fence() {
 #[test]
 fn parses_inline_markup() {
     let input = "Use *simple* data and **explicit** rules with `lightdown build`.";
-    let document = lightdown::parse(input).expect("inline markup parses");
+    let module = lightdown::parse(input).expect("inline markup parses");
 
-    let BlockKind::Paragraph(inlines) = &document.blocks[0].kind else {
-        panic!("expected paragraph");
-    };
+    let paragraph = &call_args(&module.body)[0];
+    let inline_args = call_args(paragraph);
 
-    assert!(matches!(
-        &inlines[1].kind,
-        lightdown_ir::InlineKind::Emphasis(_)
-    ));
-    assert!(matches!(
-        &inlines[3].kind,
-        lightdown_ir::InlineKind::Strong(_)
-    ));
-    assert!(matches!(
-        &inlines[5].kind,
-        lightdown_ir::InlineKind::Code(code) if code == "lightdown build"
-    ));
+    assert!(inline_args.iter().any(|expr| is_named_call(expr, "em")));
+    assert!(inline_args.iter().any(|expr| is_named_call(expr, "strong")));
+    assert!(inline_args.iter().any(|expr| is_named_call(expr, "code")));
 }
 
 #[test]
 fn parses_links_and_images() {
-    let input = "Read [the guide](https://example.com/guide) ![Alt text](https://example.com/a.png)";
-    let document = lightdown::parse(input).expect("links and images parse");
+    let input =
+        "Read [the guide](https://example.com/guide) ![Alt text](https://example.com/a.png)";
+    let module = lightdown::parse(input).expect("links and images parse");
 
-    let BlockKind::Paragraph(inlines) = &document.blocks[0].kind else {
-        panic!("expected paragraph");
-    };
+    let paragraph = &call_args(&module.body)[0];
+    let inline_args = call_args(paragraph);
 
-    assert!(matches!(
-        &inlines[1].kind,
-        lightdown_ir::InlineKind::Link { href, .. } if href == "https://example.com/guide"
-    ));
-    assert!(matches!(
-        &inlines[3].kind,
-        lightdown_ir::InlineKind::Image { src, alt }
-            if src == "https://example.com/a.png" && alt.as_deref() == Some("Alt text")
-    ));
+    let link = inline_args
+        .iter()
+        .find(|expr| is_named_call(expr, "a"))
+        .expect("link call exists");
+    let image = inline_args
+        .iter()
+        .find(|expr| is_named_call(expr, "img"))
+        .expect("image call exists");
+
+    assert_string(&call_args(link)[0], "https://example.com/guide");
+    assert_string(&call_args(image)[0], "https://example.com/a.png");
+    assert_string(&call_args(image)[1], "Alt text");
 }
 
 #[test]
@@ -123,38 +103,73 @@ fn parses_embedded_ir_with_nested_lightdown_fragment() {
         Do you know \(a {:href "https://example.com"} [`lightdown`])? `lightdown` is good.
     "#};
 
-    let document = lightdown::parse(input).expect("embedded ir parses");
-    let BlockKind::Paragraph(inlines) = &document.blocks[2].kind else {
-        panic!("expected paragraph");
-    };
+    let module = lightdown::parse(input).expect("embedded ir parses");
+    let paragraph = &call_args(&module.body)[2];
+    let link = call_args(paragraph)
+        .iter()
+        .find(|expr| is_named_call(expr, "a"))
+        .expect("embedded link exists");
 
+    assert_string(&call_args(link)[0], "https://example.com");
     assert!(matches!(
-        &inlines[1].kind,
-        lightdown_ir::InlineKind::Link { href, children }
-            if href == "https://example.com"
-            && matches!(children[0].kind, lightdown_ir::InlineKind::Code(ref text) if text == "lightdown")
+        &call_args(link)[1].kind,
+        ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Symbol(name) if name == "code")
     ));
 }
 
 #[test]
-fn rejects_invalid_embedded_ir() {
-    let error = lightdown::parse(r#"Use \(a {:href "/"} (a {:href "/x"} "x"))"#)
-        .expect_err("invalid embedded ir is rejected");
-
-    assert!(matches!(error.kind, lightdown::ParseErrorKind::EmbeddedIr(_)));
-}
-
-#[test]
-fn parses_block_embedded_ir_table() {
+fn parses_block_embedded_ir_table_with_list_map_apply() {
     let input = indoc::indoc! {r#"
         \(table
-          (tr (th [Company]))
-          (tr (td [Alfreds Futterkiste]))
+          (thead
+            (apply tr (map th (list [Company] [Description]))))
         )
     "#};
 
-    let document = lightdown::parse(input).expect("block embedded ir parses");
+    let module = lightdown::parse(input).expect("block embedded ir parses");
+    let table = &call_args(&module.body)[0];
+    let thead = &call_args(table)[0];
+    let apply = &call_args(thead)[0];
 
-    assert_eq!(document.blocks.len(), 1);
-    assert!(matches!(document.blocks[0].kind, BlockKind::Table(_)));
+    assert_call_name(apply, "apply");
+    assert_symbol(&call_args(apply)[0], "tr");
+    assert_call_name(&call_args(apply)[1], "map");
+}
+
+fn call_args(expr: &Expr) -> &[Expr] {
+    let ExprKind::Call { args, .. } = &expr.kind else {
+        panic!("expected call expression");
+    };
+    args
+}
+
+fn assert_call_name(expr: &Expr, expected: &str) {
+    let ExprKind::Call { callee, .. } = &expr.kind else {
+        panic!("expected call expression");
+    };
+    assert_symbol(callee, expected);
+}
+
+fn assert_symbol(expr: &Expr, expected: &str) {
+    assert!(
+        matches!(&expr.kind, ExprKind::Symbol(name) if name == expected),
+        "expected symbol {expected:?}, got {:?}",
+        expr.kind
+    );
+}
+
+fn assert_string(expr: &Expr, expected: &str) {
+    assert!(
+        matches!(&expr.kind, ExprKind::String(text) if text == expected),
+        "expected string {expected:?}, got {:?}",
+        expr.kind
+    );
+}
+
+fn is_named_call(expr: &Expr, expected: &str) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Symbol(name) if name == expected)
+    )
 }

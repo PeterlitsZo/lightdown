@@ -13,8 +13,8 @@ fn render_author_syntax(input: &str) -> Result<String, lightdown::RenderError> {
 mod tests {
     #[test]
     fn renders_author_syntax_from_wasm_entrypoint() {
-        let html = super::render_author_syntax("# Hello\n\n`lightdown`")
-            .expect("wasm entrypoint renders");
+        let html =
+            super::render_author_syntax("# Hello\n\n`lightdown`").expect("wasm entrypoint renders");
 
         assert_eq!(html, "<h1>Hello</h1><p><code>lightdown</code></p>");
     }

@@ -74,7 +74,11 @@ impl<'a> InlineParser<'a> {
         let start = self.cursor;
         self.cursor += 1;
         let Some(close) = self.input[self.cursor..].find('*') else {
-            return Err(self.error(ParseErrorKind::UnterminatedEmphasis, start, self.input.len()));
+            return Err(self.error(
+                ParseErrorKind::UnterminatedEmphasis,
+                start,
+                self.input.len(),
+            ));
         };
         let inner_start = self.cursor;
         let inner_end = self.cursor + close;

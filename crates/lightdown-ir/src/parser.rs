@@ -1,17 +1,14 @@
 use std::collections::BTreeMap;
 
-use crate::ast::{
-    Block, BlockKind, Document, DocumentMetadata, Inline, InlineKind, Node, TableCell,
-    TableCellKind, TableChild, TableChildKind, TableRow, TableRowKind,
-};
+use crate::ast::{Expr, ExprKind, Module, ModuleMetadata, Node};
 use crate::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 
-pub fn parse(input: &str) -> Result<Document, ParseError> {
-    Parser::new(Lexer::new(input))?.parse_document()
+pub fn parse(input: &str) -> Result<Module, ParseError> {
+    Parser::new(Lexer::new(input))?.parse_module()
 }
 
-pub fn parse_inline_fragment(input: &str) -> Result<Inline, ParseError> {
-    Parser::new(Lexer::new(input))?.parse_inline_fragment()
+pub fn parse_expr_fragment(input: &str) -> Result<Expr, ParseError> {
+    Parser::new(Lexer::new(input))?.parse_expr_fragment()
 }
 
 pub struct Parser {
@@ -31,29 +28,29 @@ impl Parser {
         Ok(Self { tokens, cursor: 0 })
     }
 
-    pub fn parse_document(mut self) -> Result<Document, ParseError> {
-        let document = self.parse_doc_node()?;
+    pub fn parse_module(mut self) -> Result<Module, ParseError> {
+        let module = self.parse_doc_module()?;
         if let Some(token) = self.peek() {
             return Err(ParseError::new(
                 ParseErrorKind::ExtraInput,
                 Some(token.span),
             ));
         }
-        Ok(document)
+        Ok(module)
     }
 
-    pub fn parse_inline_fragment(mut self) -> Result<Inline, ParseError> {
-        let inline = self.parse_inline("fragment", false)?;
+    pub fn parse_expr_fragment(mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_expr()?;
         if let Some(token) = self.peek() {
             return Err(ParseError::new(
                 ParseErrorKind::ExtraInput,
                 Some(token.span),
             ));
         }
-        Ok(inline)
+        Ok(expr)
     }
 
-    fn parse_doc_node(&mut self) -> Result<Document, ParseError> {
+    fn parse_doc_module(&mut self) -> Result<Module, ParseError> {
         let start = self.expect_kind(TokenShape::LParen)?.span.start;
         let name = self.expect_symbol()?;
         if name.value != "doc" {
@@ -65,24 +62,32 @@ impl Parser {
 
         let attributes = self.parse_required_attribute_map("doc", &["meta"])?;
         let metadata = self.parse_document_metadata(attributes)?;
-        let mut blocks = Vec::new();
+        let mut args = Vec::new();
 
         while !self.at_shape(TokenShape::RParen) {
-            blocks.push(self.parse_block("doc")?);
+            args.push(self.parse_expr()?);
         }
 
         let end = self.expect_kind(TokenShape::RParen)?.span.end;
-        Ok(Document {
+        let span = Span { start, end };
+
+        Ok(Module {
             metadata,
-            blocks,
-            span: Span { start, end },
+            body: Node::new(
+                ExprKind::Call {
+                    callee: Box::new(Node::new(ExprKind::Symbol("doc".into()), name.span)),
+                    args,
+                },
+                span,
+            ),
+            span,
         })
     }
 
     fn parse_document_metadata(
         &mut self,
         mut attributes: AttributeMap,
-    ) -> Result<DocumentMetadata, ParseError> {
+    ) -> Result<ModuleMetadata, ParseError> {
         let entry = attributes.remove("meta").ok_or_else(|| {
             ParseError::new(
                 ParseErrorKind::MissingAttribute {
@@ -110,473 +115,113 @@ impl Parser {
         let version = self.take_string_attribute(&mut metadata, "meta", "version")?;
         self.reject_remaining_attributes("meta", &metadata)?;
 
-        Ok(DocumentMetadata {
+        Ok(ModuleMetadata {
             version: version.value,
             span: entry.span,
         })
     }
 
-    fn parse_block(&mut self, parent: &str) -> Result<Block, ParseError> {
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         let token = self.peek().ok_or_else(|| {
-            ParseError::new(ParseErrorKind::UnexpectedEof { expected: "block" }, None)
+            ParseError::new(
+                ParseErrorKind::UnexpectedEof {
+                    expected: "expression",
+                },
+                None,
+            )
         })?;
 
-        if !matches!(token.kind, TokenKind::LParen) {
-            return Err(ParseError::new(
-                ParseErrorKind::UnexpectedToken {
-                    expected: "block",
-                    found: token_description(&token.kind),
-                },
-                Some(token.span),
-            ));
-        }
-
-        let start = self.expect_kind(TokenShape::LParen)?.span.start;
-        let name = self.expect_symbol()?;
-        let block = match name.value.as_str() {
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                self.reject_attribute_map_if_present(name.value.as_str())?;
-                let level = name.value[1..]
-                    .parse::<u8>()
-                    .expect("heading level is valid");
-                let inlines = self.parse_inlines_until_rparen(name.value.as_str(), false)?;
-                BlockKind::Heading { level, inlines }
-            }
-            "p" => {
-                self.reject_attribute_map_if_present("p")?;
-                BlockKind::Paragraph(self.parse_inlines_until_rparen("p", false)?)
-            }
-            "ul" | "ol" => {
-                self.reject_attribute_map_if_present(name.value.as_str())?;
-                let mut items = Vec::new();
-                while !self.at_shape(TokenShape::RParen) {
-                    let item = self.parse_block(name.value.as_str())?;
-                    if !matches!(item.kind, BlockKind::ListItem(_)) {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: name.value.clone(),
-                                child: block_name(&item.kind).into(),
-                            },
-                            Some(item.span),
-                        ));
-                    }
-                    items.push(item);
-                }
-                if items.is_empty() {
-                    return Err(ParseError::new(
-                        ParseErrorKind::MissingChild {
-                            parent: name.value.clone(),
-                            expected: "li",
-                        },
-                        Some(Span {
-                            start,
-                            end: self.current_end(start),
-                        }),
-                    ));
-                }
-                BlockKind::List {
-                    ordered: name.value == "ol",
-                    items,
-                }
-            }
-            "li" => {
-                self.reject_attribute_map_if_present("li")?;
-                let children = self.parse_blocks_until_rparen("li")?;
-                if children.is_empty() {
-                    return Err(ParseError::new(
-                        ParseErrorKind::MissingChild {
-                            parent: "li".into(),
-                            expected: "block",
-                        },
-                        Some(Span {
-                            start,
-                            end: self.current_end(start),
-                        }),
-                    ));
-                }
-                BlockKind::ListItem(children)
-            }
-            "blockquote" => {
-                self.reject_attribute_map_if_present("blockquote")?;
-                let children = self.parse_blocks_until_rparen("blockquote")?;
-                if children.is_empty() {
-                    return Err(ParseError::new(
-                        ParseErrorKind::MissingChild {
-                            parent: "blockquote".into(),
-                            expected: "block",
-                        },
-                        Some(Span {
-                            start,
-                            end: self.current_end(start),
-                        }),
-                    ));
-                }
-                BlockKind::BlockQuote(children)
-            }
-            "codeblock" => {
-                let mut attributes = self.parse_optional_attribute_map("codeblock", &["lang"])?;
-                let lang =
-                    self.take_optional_string_attribute(&mut attributes, "codeblock", "lang")?;
-                self.reject_remaining_attributes("codeblock", &attributes)?;
-                let text = self.expect_string_child("codeblock")?;
-                if !self.at_shape(TokenShape::RParen) {
-                    let child = self.describe_next_child()?;
-                    return Err(ParseError::new(
-                        ParseErrorKind::InvalidChild {
-                            parent: "codeblock".into(),
-                            child,
-                        },
-                        self.peek().map(|token| token.span),
-                    ));
-                }
-                BlockKind::CodeBlock { lang, text }
-            }
-            "hr" => {
-                self.reject_attribute_map_if_present("hr")?;
-                if !self.at_shape(TokenShape::RParen) {
-                    let child = self.describe_next_child()?;
-                    return Err(ParseError::new(
-                        ParseErrorKind::InvalidChild {
-                            parent: "hr".into(),
-                            child,
-                        },
-                        self.peek().map(|token| token.span),
-                    ));
-                }
-                BlockKind::ThematicBreak
-            }
-            "table" => {
-                self.reject_attribute_map_if_present("table")?;
-                BlockKind::Table(self.parse_table_children()?)
-            }
-            inline if is_inline_node(inline) => {
-                return Err(ParseError::new(
-                    ParseErrorKind::InvalidChild {
-                        parent: parent.into(),
-                        child: inline.into(),
-                    },
-                    Some(name.span),
-                ));
-            }
-            unknown => {
-                return Err(ParseError::new(
-                    ParseErrorKind::UnknownNode {
-                        node: unknown.into(),
-                    },
-                    Some(name.span),
-                ));
-            }
-        };
-
-        let end = self.expect_kind(TokenShape::RParen)?.span.end;
-        Ok(Node::new(block, Span { start, end }))
-    }
-
-    fn parse_blocks_until_rparen(&mut self, parent: &str) -> Result<Vec<Block>, ParseError> {
-        let mut blocks = Vec::new();
-        while !self.at_shape(TokenShape::RParen) {
-            blocks.push(self.parse_block(parent)?);
-        }
-        Ok(blocks)
-    }
-
-    fn parse_inline(&mut self, parent: &str, inside_link: bool) -> Result<Inline, ParseError> {
-        let Some(token) = self.peek() else {
-            return Err(ParseError::new(
-                ParseErrorKind::UnexpectedEof { expected: "inline" },
-                None,
-            ));
-        };
-
         match &token.kind {
-            TokenKind::String(text) => {
+            TokenKind::String(value) => {
                 let span = token.span;
-                let text = text.clone();
+                let value = value.clone();
                 self.cursor += 1;
-                Ok(Node::new(InlineKind::Text(text), span))
+                Ok(Node::new(ExprKind::String(value), span))
             }
-            TokenKind::LParen => {
-                let start = self.expect_kind(TokenShape::LParen)?.span.start;
-                let name = self.expect_symbol()?;
-                let inline = match name.value.as_str() {
-                    "em" => {
-                        self.reject_attribute_map_if_present("em")?;
-                        InlineKind::Emphasis(self.parse_inlines_until_rparen("em", inside_link)?)
-                    }
-                    "strong" => {
-                        self.reject_attribute_map_if_present("strong")?;
-                        InlineKind::Strong(self.parse_inlines_until_rparen("strong", inside_link)?)
-                    }
-                    "code" => {
-                        self.reject_attribute_map_if_present("code")?;
-                        let text = self.expect_string_child("code")?;
-                        if !self.at_shape(TokenShape::RParen) {
-                            let child = self.describe_next_child()?;
-                            return Err(ParseError::new(
-                                ParseErrorKind::InvalidChild {
-                                    parent: "code".into(),
-                                    child,
-                                },
-                                self.peek().map(|token| token.span),
-                            ));
-                        }
-                        InlineKind::Code(text)
-                    }
-                    "a" => {
-                        if inside_link {
-                            return Err(ParseError::new(
-                                ParseErrorKind::InvalidChild {
-                                    parent: "a".into(),
-                                    child: "a".into(),
-                                },
-                                Some(name.span),
-                            ));
-                        }
-                        let mut attributes = self.parse_required_attribute_map("a", &["href"])?;
-                        let href = self
-                            .take_string_attribute(&mut attributes, "a", "href")?
-                            .value;
-                        self.reject_remaining_attributes("a", &attributes)?;
-                        let children = self.parse_inlines_until_rparen("a", true)?;
-                        InlineKind::Link { href, children }
-                    }
-                    "img" => {
-                        let mut attributes =
-                            self.parse_required_attribute_map("img", &["src", "alt"])?;
-                        let src = self
-                            .take_string_attribute(&mut attributes, "img", "src")?
-                            .value;
-                        let alt =
-                            self.take_optional_string_attribute(&mut attributes, "img", "alt")?;
-                        self.reject_remaining_attributes("img", &attributes)?;
-                        if !self.at_shape(TokenShape::RParen) {
-                            let child = self.describe_next_child()?;
-                            return Err(ParseError::new(
-                                ParseErrorKind::InvalidChild {
-                                    parent: "img".into(),
-                                    child,
-                                },
-                                self.peek().map(|token| token.span),
-                            ));
-                        }
-                        InlineKind::Image { src, alt }
-                    }
-                    "br" => {
-                        self.reject_attribute_map_if_present("br")?;
-                        if !self.at_shape(TokenShape::RParen) {
-                            let child = self.describe_next_child()?;
-                            return Err(ParseError::new(
-                                ParseErrorKind::InvalidChild {
-                                    parent: "br".into(),
-                                    child,
-                                },
-                                self.peek().map(|token| token.span),
-                            ));
-                        }
-                        InlineKind::Break
-                    }
-                    block if is_block_node(block) => {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: parent.into(),
-                                child: block.into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
-                    unknown => {
-                        return Err(ParseError::new(
-                            ParseErrorKind::UnknownNode {
-                                node: unknown.into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
+            TokenKind::Symbol(value) => {
+                let span = token.span;
+                let value = value.clone();
+                self.cursor += 1;
+                let kind = match value.as_str() {
+                    "true" => ExprKind::Bool(true),
+                    "false" => ExprKind::Bool(false),
+                    _ => ExprKind::Symbol(value),
                 };
-
-                let end = self.expect_kind(TokenShape::RParen)?.span.end;
-                Ok(Node::new(inline, Span { start, end }))
+                Ok(Node::new(kind, span))
             }
-            _ => Err(ParseError::new(
+            TokenKind::LParen => self.parse_call(),
+            kind => Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken {
-                    expected: "inline",
-                    found: token_description(&token.kind),
+                    expected: "expression",
+                    found: token_description(kind),
                 },
                 Some(token.span),
             )),
         }
     }
 
-    fn parse_inlines_until_rparen(
-        &mut self,
-        parent: &str,
-        inside_link: bool,
-    ) -> Result<Vec<Inline>, ParseError> {
-        let mut inlines = Vec::new();
+    fn parse_call(&mut self) -> Result<Expr, ParseError> {
+        let start = self.expect_kind(TokenShape::LParen)?.span.start;
+        let name = self.expect_symbol()?;
+        let mut args = self.parse_prefixed_args(name.value.as_str())?;
         while !self.at_shape(TokenShape::RParen) {
-            inlines.push(self.parse_inline(parent, inside_link)?);
-        }
-        Ok(inlines)
-    }
-
-    fn parse_table_children(&mut self) -> Result<Vec<TableChild>, ParseError> {
-        let mut children = Vec::new();
-        let mut seen_head = false;
-        let mut seen_body = false;
-        let mut direct_rows = Vec::new();
-
-        while !self.at_shape(TokenShape::RParen) {
-            let start = self.expect_kind(TokenShape::LParen)?.span.start;
-            let name = self.expect_symbol()?;
-            let kind = match name.value.as_str() {
-                "thead" => {
-                    if seen_head || seen_body {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: "table".into(),
-                                child: "thead".into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
-                    seen_head = true;
-                    self.reject_attribute_map_if_present("thead")?;
-                    TableChildKind::Head(self.parse_table_rows("thead")?)
-                }
-                "tbody" => {
-                    if !direct_rows.is_empty() {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: "table".into(),
-                                child: "tbody".into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
-                    if seen_body {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: "table".into(),
-                                child: "tbody".into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
-                    seen_body = true;
-                    self.reject_attribute_map_if_present("tbody")?;
-                    TableChildKind::Body(self.parse_table_rows("tbody")?)
-                }
-                "tr" => {
-                    if seen_head || seen_body {
-                        return Err(ParseError::new(
-                            ParseErrorKind::InvalidChild {
-                                parent: "table".into(),
-                                child: "tr".into(),
-                            },
-                            Some(name.span),
-                        ));
-                    }
-                    let row = self.parse_table_row(start, "table")?;
-                    direct_rows.push(row);
-                    continue;
-                }
-                other => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::InvalidChild {
-                            parent: "table".into(),
-                            child: other.into(),
-                        },
-                        Some(name.span),
-                    ));
-                }
-            };
-            let end = self.expect_kind(TokenShape::RParen)?.span.end;
-            children.push(Node::new(kind, Span { start, end }));
-        }
-
-        if !direct_rows.is_empty() {
-            return Ok(normalize_direct_table_rows(direct_rows));
-        }
-
-        Ok(children)
-    }
-
-    fn parse_table_rows(&mut self, parent: &str) -> Result<Vec<TableRow>, ParseError> {
-        let mut rows = Vec::new();
-        while !self.at_shape(TokenShape::RParen) {
-            let start = self.expect_kind(TokenShape::LParen)?.span.start;
-            let name = self.expect_symbol()?;
-            if name.value != "tr" {
-                return Err(ParseError::new(
-                    ParseErrorKind::InvalidChild {
-                        parent: parent.into(),
-                        child: name.value,
-                    },
-                    Some(name.span),
-                ));
-            }
-            rows.push(self.parse_table_row(start, parent)?);
-        }
-        if rows.is_empty() {
-            return Err(ParseError::new(
-                ParseErrorKind::MissingChild {
-                    parent: parent.into(),
-                    expected: "tr",
-                },
-                None,
-            ));
-        }
-        Ok(rows)
-    }
-
-    fn parse_table_row(&mut self, start: crate::Position, parent: &str) -> Result<TableRow, ParseError> {
-        self.reject_attribute_map_if_present("tr")?;
-        let cells = self.parse_table_cells()?;
-        if cells.is_empty() {
-            return Err(ParseError::new(
-                ParseErrorKind::MissingChild {
-                    parent: "tr".into(),
-                    expected: "th or td",
-                },
-                Some(Span {
-                    start,
-                    end: self.current_end(start),
-                }),
-            ));
+            args.push(self.parse_expr()?);
         }
         let end = self.expect_kind(TokenShape::RParen)?.span.end;
-        let _ = parent;
-        Ok(Node::new(TableRowKind { cells }, Span { start, end }))
+
+        Ok(Node::new(
+            ExprKind::Call {
+                callee: Box::new(Node::new(ExprKind::Symbol(name.value), name.span)),
+                args,
+            },
+            Span { start, end },
+        ))
     }
 
-    fn parse_table_cells(&mut self) -> Result<Vec<TableCell>, ParseError> {
-        let mut cells = Vec::new();
-        while !self.at_shape(TokenShape::RParen) {
-            let start = self.expect_kind(TokenShape::LParen)?.span.start;
-            let name = self.expect_symbol()?;
-            let kind = match name.value.as_str() {
-                "th" => {
-                    self.reject_attribute_map_if_present("th")?;
-                    TableCellKind::Header(self.parse_inlines_until_rparen("th", false)?)
-                }
-                "td" => {
-                    self.reject_attribute_map_if_present("td")?;
-                    TableCellKind::Data(self.parse_inlines_until_rparen("td", false)?)
-                }
-                other => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::InvalidChild {
-                            parent: "tr".into(),
-                            child: other.into(),
-                        },
-                        Some(name.span),
-                    ));
-                }
-            };
-            let end = self.expect_kind(TokenShape::RParen)?.span.end;
-            cells.push(Node::new(kind, Span { start, end }));
+    fn parse_prefixed_args(&mut self, node: &str) -> Result<Vec<Expr>, ParseError> {
+        if !self.at_shape(TokenShape::LBrace) {
+            return Ok(Vec::new());
         }
-        Ok(cells)
+
+        match node {
+            "a" => {
+                let mut attributes = self.parse_attribute_map("a", &["href"])?;
+                let href = self.take_string_attribute(&mut attributes, "a", "href")?;
+                self.reject_remaining_attributes("a", &attributes)?;
+                Ok(vec![Node::new(ExprKind::String(href.value), href.span)])
+            }
+            "img" => {
+                let mut attributes = self.parse_attribute_map("img", &["src", "alt"])?;
+                let src = self.take_string_attribute(&mut attributes, "img", "src")?;
+                let alt = self.take_optional_string_attribute(&mut attributes, "img", "alt")?;
+                self.reject_remaining_attributes("img", &attributes)?;
+
+                let mut args = vec![Node::new(ExprKind::String(src.value), src.span)];
+                if let Some(alt) = alt {
+                    args.push(Node::new(ExprKind::String(alt), src.span));
+                }
+                Ok(args)
+            }
+            "codeblock" => {
+                let mut attributes = self.parse_attribute_map("codeblock", &["lang"])?;
+                let lang =
+                    self.take_optional_string_attribute(&mut attributes, "codeblock", "lang")?;
+                self.reject_remaining_attributes("codeblock", &attributes)?;
+
+                let mut args = Vec::new();
+                if let Some(lang) = lang {
+                    args.push(Node::new(ExprKind::String(lang), self.previous_span()));
+                }
+                Ok(args)
+            }
+            _ => Err(ParseError::new(
+                ParseErrorKind::UnknownAttribute {
+                    node: node.into(),
+                    attribute: "*".into(),
+                },
+                self.peek().map(|token| token.span),
+            )),
+        }
     }
 
     fn parse_required_attribute_map(
@@ -594,18 +239,6 @@ impl Parser {
             ));
         }
         self.parse_attribute_map(node, allowed)
-    }
-
-    fn parse_optional_attribute_map(
-        &mut self,
-        node: &str,
-        allowed: &[&str],
-    ) -> Result<AttributeMap, ParseError> {
-        if self.at_shape(TokenShape::LBrace) {
-            self.parse_attribute_map(node, allowed)
-        } else {
-            Ok(AttributeMap::new())
-        }
     }
 
     fn parse_attribute_map(
@@ -722,21 +355,6 @@ impl Parser {
         }
     }
 
-    fn reject_attribute_map_if_present(&self, node: &str) -> Result<(), ParseError> {
-        if let Some(token) = self.peek()
-            && matches!(token.kind, TokenKind::LBrace)
-        {
-            return Err(ParseError::new(
-                ParseErrorKind::UnknownAttribute {
-                    node: node.into(),
-                    attribute: "*".into(),
-                },
-                Some(token.span),
-            ));
-        }
-        Ok(())
-    }
-
     fn take_string_attribute(
         &self,
         attributes: &mut AttributeMap,
@@ -753,7 +371,10 @@ impl Parser {
             )
         })?;
         match entry.value {
-            MapValue::String(value) => Ok(StringEntry { value }),
+            MapValue::String(value) => Ok(StringEntry {
+                value,
+                span: entry.span,
+            }),
             MapValue::Map(_) => Err(ParseError::new(
                 ParseErrorKind::InvalidAttributeType {
                     node: node.into(),
@@ -794,55 +415,6 @@ impl Parser {
             ));
         }
         Ok(())
-    }
-
-    fn expect_string_child(&mut self, parent: &str) -> Result<String, ParseError> {
-        let token = self.peek().ok_or_else(|| {
-            ParseError::new(
-                ParseErrorKind::MissingChild {
-                    parent: parent.into(),
-                    expected: "string",
-                },
-                None,
-            )
-        })?;
-        match &token.kind {
-            TokenKind::String(value) => {
-                let value = value.clone();
-                self.cursor += 1;
-                Ok(value)
-            }
-            TokenKind::RParen => Err(ParseError::new(
-                ParseErrorKind::MissingChild {
-                    parent: parent.into(),
-                    expected: "string",
-                },
-                Some(token.span),
-            )),
-            _ => {
-                let child = self.describe_next_child()?;
-                Err(ParseError::new(
-                    ParseErrorKind::InvalidChild {
-                        parent: parent.into(),
-                        child,
-                    },
-                    Some(token.span),
-                ))
-            }
-        }
-    }
-
-    fn describe_next_child(&self) -> Result<String, ParseError> {
-        let Some(token) = self.peek() else {
-            return Ok("end of input".into());
-        };
-        if matches!(token.kind, TokenKind::LParen)
-            && let Some(next) = self.tokens.get(self.cursor + 1)
-            && let TokenKind::Symbol(name) = &next.kind
-        {
-            return Ok(name.clone());
-        }
-        Ok(token_description(&token.kind).into())
     }
 
     fn expect_symbol(&mut self) -> Result<SpannedString, ParseError> {
@@ -916,6 +488,10 @@ impl Parser {
     fn current_end(&self, fallback: crate::Position) -> crate::Position {
         self.peek().map_or(fallback, |token| token.span.start)
     }
+
+    fn previous_span(&self) -> Span {
+        self.tokens[self.cursor - 1].span
+    }
 }
 
 type AttributeMap = BTreeMap<String, MapEntry>;
@@ -934,6 +510,7 @@ enum MapValue {
 
 struct StringEntry {
     value: String,
+    span: Span,
 }
 
 struct SpannedString {
@@ -1029,92 +606,6 @@ pub enum ParseErrorKind {
         attribute: String,
         expected: &'static str,
     },
-}
-
-fn normalize_direct_table_rows(rows: Vec<TableRow>) -> Vec<TableChild> {
-    let head_len = rows
-        .iter()
-        .take_while(|row| {
-            row.kind
-                .cells
-                .iter()
-                .all(|cell| matches!(cell.kind, TableCellKind::Header(_)))
-        })
-        .count();
-
-    let mut children = Vec::new();
-    if head_len > 0 {
-        let span = Span {
-            start: rows[0].span.start,
-            end: rows[head_len - 1].span.end,
-        };
-        children.push(Node::new(
-            TableChildKind::Head(rows[..head_len].to_vec()),
-            span,
-        ));
-    }
-
-    if head_len < rows.len() {
-        let span = Span {
-            start: rows[head_len].span.start,
-            end: rows[rows.len() - 1].span.end,
-        };
-        children.push(Node::new(
-            TableChildKind::Body(rows[head_len..].to_vec()),
-            span,
-        ));
-    }
-
-    children
-}
-
-fn is_block_node(name: &str) -> bool {
-    matches!(
-        name,
-        "h1" | "h2"
-            | "h3"
-            | "h4"
-            | "h5"
-            | "h6"
-            | "p"
-            | "ul"
-            | "ol"
-            | "li"
-            | "blockquote"
-            | "codeblock"
-            | "hr"
-            | "table"
-    )
-}
-
-fn is_inline_node(name: &str) -> bool {
-    matches!(name, "em" | "strong" | "code" | "a" | "img" | "br")
-}
-
-fn block_name(kind: &BlockKind) -> &'static str {
-    match kind {
-        BlockKind::Heading { level, .. } => match level {
-            1 => "h1",
-            2 => "h2",
-            3 => "h3",
-            4 => "h4",
-            5 => "h5",
-            _ => "h6",
-        },
-        BlockKind::Paragraph(_) => "p",
-        BlockKind::List { ordered, .. } => {
-            if *ordered {
-                "ol"
-            } else {
-                "ul"
-            }
-        }
-        BlockKind::ListItem(_) => "li",
-        BlockKind::BlockQuote(_) => "blockquote",
-        BlockKind::CodeBlock { .. } => "codeblock",
-        BlockKind::ThematicBreak => "hr",
-        BlockKind::Table(_) => "table",
-    }
 }
 
 fn token_description(kind: &TokenKind) -> &'static str {

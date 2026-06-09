@@ -1,7 +1,7 @@
 (doc {:meta {:version "0.1.0"}}
-  (p (em "small") " " (strong "large") " " (code "x < y") (br) "next")
-  (blockquote (p "quoted"))
+  (p (em (text "small")) (text " ") (strong (text "large")) (text " ") (code "x < y") (br) (text "next"))
+  (blockquote (p (text "quoted")))
   (hr)
   (table
-    (thead (tr (th "Name")))
-    (tbody (tr (td "Lightdown")))))
+    (thead (tr (th (text "Name"))))
+    (tbody (tr (td (text "Lightdown"))))))

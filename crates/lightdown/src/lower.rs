@@ -1,86 +1,113 @@
-use lightdown_ir::{
-    Block, BlockKind, Document, DocumentMetadata, Inline, InlineKind, Node, Position, Span,
-};
+use lightdown_ir::{Expr, ExprKind, Module, ModuleMetadata, Node, Position, Span};
 
 use crate::embedded_ir;
 use crate::error::ParseError;
 use crate::syntax::{SourceBlock, SourceBlockKind, SourceDocument, SourceInline, SourceInlineKind};
 
-pub fn lower_document(_input: &str, document: SourceDocument) -> Result<Document, ParseError> {
+pub fn lower_document(_input: &str, document: SourceDocument) -> Result<Module, ParseError> {
     let metadata_span = zero_span();
-    let blocks = lower_blocks(document.blocks)?;
-    let end = blocks.last().map_or(metadata_span.end, |block| block.span.end);
+    let args = lower_blocks(document.blocks)?;
+    let end = args.last().map_or(metadata_span.end, |expr| expr.span.end);
+    let span = Span {
+        start: metadata_span.start,
+        end,
+    };
 
-    Ok(Document {
-        metadata: DocumentMetadata {
+    Ok(Module {
+        metadata: ModuleMetadata {
             version: "0.1.0".to_string(),
             span: metadata_span,
         },
-        blocks,
-        span: Span {
-            start: metadata_span.start,
-            end,
-        },
+        body: call_expr("doc", args, span),
+        span,
     })
 }
 
-pub fn lower_blocks(blocks: Vec<SourceBlock>) -> Result<Vec<Block>, ParseError> {
+pub fn lower_blocks(blocks: Vec<SourceBlock>) -> Result<Vec<Expr>, ParseError> {
     blocks.into_iter().map(lower_block).collect()
 }
 
-fn lower_block(block: SourceBlock) -> Result<Block, ParseError> {
+fn lower_block(block: SourceBlock) -> Result<Expr, ParseError> {
     let span = block.span;
-    let kind = match block.kind {
-        SourceBlockKind::Heading { level, inlines } => BlockKind::Heading {
-            level,
-            inlines: lower_inlines(inlines)?,
-        },
-        SourceBlockKind::Paragraph(inlines) => BlockKind::Paragraph(lower_inlines(inlines)?),
-        SourceBlockKind::EmbeddedIr(source) => {
-            return embedded_ir::lower_block_fragment(source, span);
+    match block.kind {
+        SourceBlockKind::Heading { level, inlines } => {
+            Ok(call_expr(format!("h{level}"), lower_inlines(inlines)?, span))
         }
-        SourceBlockKind::List { ordered, items } => BlockKind::List {
-            ordered,
-            items: lower_blocks(items)?,
-        },
-        SourceBlockKind::ListItem(blocks) => BlockKind::ListItem(lower_blocks(blocks)?),
-        SourceBlockKind::BlockQuote(blocks) => BlockKind::BlockQuote(lower_blocks(blocks)?),
-        SourceBlockKind::CodeBlock { lang, text } => BlockKind::CodeBlock { lang, text },
-        SourceBlockKind::ThematicBreak => BlockKind::ThematicBreak,
-    };
-
-    Ok(Node { kind, span })
+        SourceBlockKind::Paragraph(inlines) => Ok(call_expr("p", lower_inlines(inlines)?, span)),
+        SourceBlockKind::EmbeddedIr(source) => embedded_ir::lower_block_fragment(source, span),
+        SourceBlockKind::List { ordered, items } => {
+            let name = if ordered { "ol" } else { "ul" };
+            Ok(call_expr(name, lower_blocks(items)?, span))
+        }
+        SourceBlockKind::ListItem(blocks) => Ok(call_expr("li", lower_blocks(blocks)?, span)),
+        SourceBlockKind::BlockQuote(blocks) => {
+            Ok(call_expr("blockquote", lower_blocks(blocks)?, span))
+        }
+        SourceBlockKind::CodeBlock { lang, text } => {
+            let mut args = Vec::new();
+            if let Some(lang) = lang {
+                args.push(string_expr(lang, span));
+            }
+            args.push(string_expr(text, span));
+            Ok(call_expr("codeblock", args, span))
+        }
+        SourceBlockKind::ThematicBreak => Ok(call_expr("hr", Vec::new(), span)),
+    }
 }
 
-pub fn lower_inlines(inlines: Vec<SourceInline>) -> Result<Vec<Inline>, ParseError> {
+pub fn lower_inlines(inlines: Vec<SourceInline>) -> Result<Vec<Expr>, ParseError> {
     inlines.into_iter().map(lower_inline).collect()
 }
 
-pub fn lower_inline_vec(inlines: Vec<SourceInline>) -> Result<Vec<Inline>, ParseError> {
+pub fn lower_inline_vec(inlines: Vec<SourceInline>) -> Result<Vec<Expr>, ParseError> {
     lower_inlines(inlines)
 }
 
-fn lower_inline(inline: SourceInline) -> Result<Inline, ParseError> {
+fn lower_inline(inline: SourceInline) -> Result<Expr, ParseError> {
     let span = inline.span;
-    let kind = match inline.kind {
-        SourceInlineKind::Text(text) => InlineKind::Text(text),
-        SourceInlineKind::Emphasis(children) => InlineKind::Emphasis(lower_inlines(children)?),
-        SourceInlineKind::Strong(children) => InlineKind::Strong(lower_inlines(children)?),
-        SourceInlineKind::Code(text) => InlineKind::Code(text),
-        SourceInlineKind::Link { href, children } => InlineKind::Link {
-            href,
-            children: lower_inlines(children)?,
-        },
-        SourceInlineKind::Image { src, alt } => InlineKind::Image {
-            src,
-            alt: Some(alt),
-        },
-        SourceInlineKind::EmbeddedIr(source) => {
-            return embedded_ir::lower_inline_fragment(source, span);
+    match inline.kind {
+        SourceInlineKind::Text(text) => Ok(call_expr("text", vec![string_expr(text, span)], span)),
+        SourceInlineKind::Emphasis(children) => Ok(call_expr("em", lower_inlines(children)?, span)),
+        SourceInlineKind::Strong(children) => {
+            Ok(call_expr("strong", lower_inlines(children)?, span))
         }
-    };
+        SourceInlineKind::Code(text) => Ok(call_expr("code", vec![string_expr(text, span)], span)),
+        SourceInlineKind::Link { href, children } => {
+            let mut args = vec![string_expr(href, span)];
+            args.extend(lower_inlines(children)?);
+            Ok(call_expr("a", args, span))
+        }
+        SourceInlineKind::Image { src, alt } => Ok(call_expr(
+            "img",
+            vec![string_expr(src, span), string_expr(alt, span)],
+            span,
+        )),
+        SourceInlineKind::EmbeddedIr(source) => embedded_ir::lower_inline_fragment(source, span),
+    }
+}
 
-    Ok(Node { kind, span })
+fn call_expr(name: impl Into<String>, args: Vec<Expr>, span: Span) -> Expr {
+    Node {
+        kind: ExprKind::Call {
+            callee: Box::new(symbol_expr(name, span)),
+            args,
+        },
+        span,
+    }
+}
+
+fn symbol_expr(name: impl Into<String>, span: Span) -> Expr {
+    Node {
+        kind: ExprKind::Symbol(name.into()),
+        span,
+    }
+}
+
+fn string_expr(text: impl Into<String>, span: Span) -> Expr {
+    Node {
+        kind: ExprKind::String(text.into()),
+        span,
+    }
 }
 
 fn zero_span() -> Span {

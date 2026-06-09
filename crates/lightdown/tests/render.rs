@@ -1,17 +1,16 @@
 #[test]
 fn renders_author_document_to_html() {
-    let html = lightdown::render_html("# Hello\n\nLightdown is small.")
-        .expect("author document renders");
+    let html =
+        lightdown::render_html("# Hello\n\nLightdown is small.").expect("author document renders");
 
     assert_eq!(html, "<h1>Hello</h1><p>Lightdown is small.</p>");
 }
 
 #[test]
 fn renders_inline_markup_to_html() {
-    let html = lightdown::render_html(
-        "Use *simple* data and **explicit** rules with `lightdown build`.",
-    )
-    .expect("inline markup renders");
+    let html =
+        lightdown::render_html("Use *simple* data and **explicit** rules with `lightdown build`.")
+            .expect("inline markup renders");
 
     assert_eq!(
         html,
@@ -43,5 +42,22 @@ fn renders_block_embedded_ir_table() {
     assert_eq!(
         html,
         "<table><thead><tr><th>Company</th></tr></thead><tbody><tr><td>Alfreds Futterkiste</td></tr></tbody></table>"
+    );
+}
+
+#[test]
+fn renders_list_map_and_apply_through_author_pipeline() {
+    let input = indoc::indoc! {r#"
+        \(table
+          (thead
+            (apply tr (map th (list [Foo] [Bar])))
+          )
+        )
+    "#};
+    let html = lightdown::render_html(input).expect("author pipeline renders map/apply");
+
+    assert_eq!(
+        html,
+        "<table><thead><tr><th>Foo</th><th>Bar</th></tr></thead></table>"
     );
 }

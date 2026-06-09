@@ -20,6 +20,25 @@ fn renders_fixture_cases() {
     }
 }
 
+#[test]
+fn renders_documents_via_the_bytecode_path() {
+    let document =
+        lightdown_ir::execute_document(
+            &lightdown_ir::compile_module(
+                &lightdown_ir::parse(
+                    r#"(doc {:meta {:version "0.1.0"}} (p (text "Rendered through bytecode.")))"#,
+                )
+                .expect("module parses"),
+            )
+            .expect("module compiles"),
+        )
+        .expect("program executes");
+
+    let html = lightdown_html::render_document(&document).expect("document renders");
+
+    assert_eq!(html, "<p>Rendered through bytecode.</p>");
+}
+
 fn testcase_path(case: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")

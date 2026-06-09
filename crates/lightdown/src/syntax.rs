@@ -19,13 +19,22 @@ pub struct SourceInline {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceBlockKind {
-    Heading { level: u8, inlines: Vec<SourceInline> },
+    Heading {
+        level: u8,
+        inlines: Vec<SourceInline>,
+    },
     Paragraph(Vec<SourceInline>),
     EmbeddedIr(String),
-    List { ordered: bool, items: Vec<SourceBlock> },
+    List {
+        ordered: bool,
+        items: Vec<SourceBlock>,
+    },
     ListItem(Vec<SourceBlock>),
     BlockQuote(Vec<SourceBlock>),
-    CodeBlock { lang: Option<String>, text: String },
+    CodeBlock {
+        lang: Option<String>,
+        text: String,
+    },
     ThematicBreak,
 }
 
@@ -35,7 +44,13 @@ pub enum SourceInlineKind {
     Emphasis(Vec<SourceInline>),
     Strong(Vec<SourceInline>),
     Code(String),
-    Link { href: String, children: Vec<SourceInline> },
-    Image { src: String, alt: String },
+    Link {
+        href: String,
+        children: Vec<SourceInline>,
+    },
+    Image {
+        src: String,
+        alt: String,
+    },
     EmbeddedIr(String),
 }

@@ -1,17 +1,23 @@
 use std::fmt;
 
 use lightdown_ir::{
-    Block, BlockKind, Document, Inline, InlineKind, ParseError, TableCell, TableCellKind,
-    TableChild, TableChildKind, TableRow, parse,
+    Block, BlockKind, CompileError, Document, Inline, InlineKind, ParseError, TableCell,
+    TableCellKind, TableChild, TableChildKind, TableRow, VmError, compile_module,
+    execute_document, parse,
 };
 
 pub fn render(input: &str) -> Result<String, RenderError> {
-    parse(input)
-        .map(|document| render_document(&document))
-        .map_err(RenderError::from)
+    let module = parse(input).map_err(RenderError::from)?;
+    let document = execute_document(&compile_module(&module).map_err(RenderError::from)?)
+        .map_err(RenderError::from)?;
+    render_document(&document)
 }
 
-pub fn render_document(document: &Document) -> String {
+pub fn render_document(document: &Document) -> Result<String, RenderError> {
+    Ok(render_resolved_document(document))
+}
+
+fn render_resolved_document(document: &Document) -> String {
     let mut output = String::new();
     render_blocks(&document.blocks, &mut output);
     output
@@ -20,6 +26,8 @@ pub fn render_document(document: &Document) -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenderError {
     Parse(ParseError),
+    Compile(CompileError),
+    Vm(VmError),
 }
 
 impl From<ParseError> for RenderError {
@@ -28,11 +36,32 @@ impl From<ParseError> for RenderError {
     }
 }
 
+impl From<CompileError> for RenderError {
+    fn from(error: CompileError) -> Self {
+        Self::Compile(error)
+    }
+}
+
+impl From<VmError> for RenderError {
+    fn from(error: VmError) -> Self {
+        Self::Vm(error)
+    }
+}
+
 impl fmt::Display for RenderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RenderError::Parse(error) => {
                 write!(formatter, "failed to parse Lightdown IR: {error:?}")
+            }
+            RenderError::Compile(error) => {
+                write!(
+                    formatter,
+                    "failed to compile Lightdown IR to bytecode: {error:?}"
+                )
+            }
+            RenderError::Vm(error) => {
+                write!(formatter, "failed to execute Lightdown bytecode: {error:?}")
             }
         }
     }

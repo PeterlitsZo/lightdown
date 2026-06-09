@@ -1,29 +1,29 @@
-use lightdown_ir::{Block, Inline, Span};
+use lightdown_ir::{Expr, ExprKind, Span};
 
 use crate::error::ParseError;
 use crate::{inline_parser, lower};
 
-pub fn lower_inline_fragment(source: String, span: Span) -> Result<Inline, ParseError> {
+pub fn lower_inline_fragment(source: String, span: Span) -> Result<Expr, ParseError> {
     let resolved = resolve_nested_lightdown_fragments(&source, span)?;
     let fragment = format!("({resolved})");
-    let mut inline =
-        lightdown_ir::parse_inline_fragment(&fragment).map_err(ParseError::from)?;
-    inline.span = span;
-    Ok(inline)
+    let mut expr = lightdown_ir::parse_expr_fragment(&fragment).map_err(ParseError::from)?;
+    expr.span = span;
+    Ok(expr)
 }
 
-pub fn lower_block_fragment(source: String, span: Span) -> Result<Block, ParseError> {
+pub fn lower_block_fragment(source: String, span: Span) -> Result<Expr, ParseError> {
     let resolved = resolve_nested_lightdown_fragments(&source, span)?;
-    let document_source = format!(
-        "(doc {{:meta {{:version \"0.1.0\"}}}}\n  ({resolved}))"
-    );
-    let mut document = lightdown_ir::parse(&document_source).map_err(ParseError::from)?;
-    let mut block = document
-        .blocks
+    let document_source = format!("(doc {{:meta {{:version \"0.1.0\"}}}} ({resolved}))");
+    let module = lightdown_ir::parse(&document_source).map_err(ParseError::from)?;
+    let ExprKind::Call { args, .. } = module.body.kind else {
+        unreachable!("doc module body is always a call");
+    };
+    let mut args = args;
+    let mut expr = args
         .pop()
         .expect("embedded block document contains exactly one block");
-    block.span = span;
-    Ok(block)
+    expr.span = span;
+    Ok(expr)
 }
 
 fn resolve_nested_lightdown_fragments(source: &str, span: Span) -> Result<String, ParseError> {
@@ -102,40 +102,31 @@ fn find_matching_bracket(source: &str, start: usize, span: Span) -> Result<usize
     ))
 }
 
-fn serialize_inline_sequence(inlines: &[Inline]) -> String {
+fn serialize_inline_sequence(inlines: &[Expr]) -> String {
     inlines
         .iter()
-        .map(serialize_inline)
+        .map(serialize_expr)
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn serialize_inline(inline: &Inline) -> String {
-    match &inline.kind {
-        lightdown_ir::InlineKind::Text(text) => serialize_string(text),
-        lightdown_ir::InlineKind::Emphasis(children) => {
-            format!("(em {})", serialize_inline_sequence(children))
-        }
-        lightdown_ir::InlineKind::Strong(children) => {
-            format!("(strong {})", serialize_inline_sequence(children))
-        }
-        lightdown_ir::InlineKind::Code(text) => format!("(code {})", serialize_string(text)),
-        lightdown_ir::InlineKind::Link { href, children } => {
-            format!(
-                "(a {{:href {}}} {})",
-                serialize_string(href),
-                serialize_inline_sequence(children)
-            )
-        }
-        lightdown_ir::InlineKind::Image { src, alt } => {
-            let mut attributes = format!(":src {}", serialize_string(src));
-            if let Some(alt) = alt {
-                attributes.push_str(" :alt ");
-                attributes.push_str(&serialize_string(alt));
+fn serialize_expr(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::String(text) => serialize_string(text),
+        ExprKind::Bool(true) => "true".to_string(),
+        ExprKind::Bool(false) => "false".to_string(),
+        ExprKind::Symbol(name) => name.clone(),
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Symbol(name) = &callee.kind else {
+                panic!("lowered inline expressions always use symbol callees");
+            };
+            if args.is_empty() {
+                format!("({name})")
+            } else {
+                let args = args.iter().map(serialize_expr).collect::<Vec<_>>().join(" ");
+                format!("({name} {args})")
             }
-            format!("(img {{{}}})", attributes)
         }
-        lightdown_ir::InlineKind::Break => "(br)".to_string(),
     }
 }
 

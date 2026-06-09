@@ -1,77 +1,150 @@
-use lightdown_ir::{
-    BlockKind, InlineKind, ParseErrorKind, TableCellKind, TableChildKind, parse,
-    parse_inline_fragment,
-};
+use lightdown_ir::{Expr, ExprKind, ParseErrorKind, parse, parse_expr_fragment};
 
 #[test]
-fn parses_minimal_document_with_nested_metadata_map() {
-    let document = parse(r#"(doc {:meta {:version "0.1.0"}})"#).expect("document parses");
+fn parses_minimal_document_module() {
+    let module = parse(r#"(doc {:meta {:version "0.1.0"}})"#).expect("module parses");
 
-    assert_eq!(document.metadata.version, "0.1.0");
-    assert!(document.blocks.is_empty());
-    assert_eq!(document.span.start.line, 1);
-    assert_eq!(document.span.start.column, 1);
+    assert_eq!(module.metadata.version, "0.1.0");
+
+    let ExprKind::Call { callee, args } = &module.body.kind else {
+        panic!("expected doc call");
+    };
+    assert_symbol(callee, "doc");
+    assert!(args.is_empty());
+    assert_eq!(module.span.start.line, 1);
+    assert_eq!(module.span.start.column, 1);
 }
 
 #[test]
-fn parses_representative_document() {
+fn parses_representative_document_as_call_tree() {
     let input = indoc::indoc! { r#"
         (doc {:meta {:version "0.1.0"}}
-          (h1 "Lightdown")
+          (h1 (text "Lightdown"))
           (p
-            "Read "
-            (a {:href "/guide.html"} "the guide")
-            ".")
+            (text "Read ")
+            (a {:href "/guide.html"} (text "the guide"))
+            (text "."))
           (ul
-            (li (p "Headings"))
-            (li (p "Code blocks")))
+            (li (p (text "Headings")))
+            (li (p (text "Code blocks"))))
           (codeblock {:lang "javascript"} """
             | console.log('hello');
             """)
           (table
             (thead
               (tr
-                (th "Name")
-                (th "Description")))
+                (th (text "Name"))
+                (th (text "Description"))))
             (tbody
               (tr
-                (td "Lightdown")
-                (td "A lightweight document language")))))
+                (td (text "Lightdown"))
+                (td (text "A lightweight document language"))))))
     "# };
 
-    let document = parse(input).expect("document parses");
+    let module = parse(input).expect("module parses");
 
-    assert_eq!(document.metadata.version, "0.1.0");
-    assert_eq!(document.blocks.len(), 5);
+    assert_eq!(module.metadata.version, "0.1.0");
 
-    assert!(matches!(
-        document.blocks[0].kind,
-        BlockKind::Heading { level: 1, .. }
-    ));
-
-    let BlockKind::Paragraph(inlines) = &document.blocks[1].kind else {
-        panic!("expected paragraph");
+    let ExprKind::Call { callee, args } = &module.body.kind else {
+        panic!("expected doc call");
     };
-    assert!(matches!(&inlines[1].kind, InlineKind::Link { href, .. } if href == "/guide.html"));
+    assert_symbol(callee, "doc");
+    assert_eq!(args.len(), 5);
 
-    let BlockKind::CodeBlock { lang, text } = &document.blocks[3].kind else {
-        panic!("expected code block");
-    };
-    assert_eq!(lang.as_deref(), Some("javascript"));
-    assert_eq!(text, "console.log('hello');");
+    assert_call_name(&args[0], "h1");
+    assert_call_name(&args[1], "p");
+    assert_call_name(&args[2], "ul");
+    assert_call_name(&args[3], "codeblock");
+    assert_call_name(&args[4], "table");
 
-    let BlockKind::Table(children) = &document.blocks[4].kind else {
-        panic!("expected table");
-    };
-    assert!(matches!(children[0].kind, TableChildKind::Head(_)));
-    assert!(matches!(children[1].kind, TableChildKind::Body(_)));
-    let TableChildKind::Head(rows) = &children[0].kind else {
-        unreachable!();
-    };
-    assert!(matches!(
-        rows[0].kind.cells[0].kind,
-        TableCellKind::Header(_)
-    ));
+    let heading_args = call_args(&args[0]);
+    assert_eq!(heading_args.len(), 1);
+    assert_text_call(&heading_args[0], "Lightdown");
+
+    let paragraph_args = call_args(&args[1]);
+    assert_eq!(paragraph_args.len(), 3);
+    assert_text_call(&paragraph_args[0], "Read ");
+    assert_call_name(&paragraph_args[1], "a");
+    assert_text_call(&paragraph_args[2], ".");
+
+    let link_args = call_args(&paragraph_args[1]);
+    assert_eq!(link_args.len(), 2);
+    assert_string(&link_args[0], "/guide.html");
+    assert_text_call(&link_args[1], "the guide");
+
+    let codeblock_args = call_args(&args[3]);
+    assert_eq!(codeblock_args.len(), 2);
+    assert_string(&codeblock_args[0], "javascript");
+    assert_string(&codeblock_args[1], "console.log('hello');");
+}
+
+#[test]
+fn parses_list_map_and_apply_calls() {
+    let module = parse(indoc::indoc! {r#"
+        (doc {:meta {:version "0.1.0"}}
+          (table
+            (thead
+              (apply tr (map th (list (text "Foo") (text "Bar")))))))
+    "#})
+    .expect("module parses");
+
+    let table = &call_args(&module.body)[0];
+    let thead = &call_args(table)[0];
+    let apply = &call_args(thead)[0];
+
+    assert_call_name(apply, "apply");
+    let apply_args = call_args(apply);
+    assert_eq!(apply_args.len(), 2);
+    assert_symbol(&apply_args[0], "tr");
+
+    let map = &apply_args[1];
+    assert_call_name(map, "map");
+    let map_args = call_args(map);
+    assert_eq!(map_args.len(), 2);
+    assert_symbol(&map_args[0], "th");
+
+    let list = &map_args[1];
+    assert_call_name(list, "list");
+    let list_args = call_args(list);
+    assert_eq!(list_args.len(), 2);
+    assert_text_call(&list_args[0], "Foo");
+    assert_text_call(&list_args[1], "Bar");
+}
+
+#[test]
+fn normalizes_attribute_sugar_into_positional_calls() {
+    let module = parse(indoc::indoc! {r#"
+        (doc {:meta {:version "0.1.0"}}
+          (p
+            (a {:href "/"} (text "home"))
+            (img {:src "/logo.png" :alt "Logo"})
+            (codeblock {:lang "rust"} "fn main() {}")))
+    "#})
+    .expect("module parses");
+
+    let paragraph = &call_args(&module.body)[0];
+    let paragraph_args = call_args(paragraph);
+
+    let link = &paragraph_args[0];
+    assert_call_name(link, "a");
+    let link_args = call_args(link);
+    assert_eq!(link_args.len(), 2);
+    assert_string(&link_args[0], "/");
+    assert_text_call(&link_args[1], "home");
+
+    let image = &paragraph_args[1];
+    assert_call_name(image, "img");
+    let image_args = call_args(image);
+    assert_eq!(image_args.len(), 2);
+    assert_string(&image_args[0], "/logo.png");
+    assert_string(&image_args[1], "Logo");
+
+    let codeblock = &paragraph_args[2];
+    assert_call_name(codeblock, "codeblock");
+    let codeblock_args = call_args(codeblock);
+    assert_eq!(codeblock_args.len(), 2);
+    assert_string(&codeblock_args[0], "rust");
+    assert_string(&codeblock_args[1], "fn main() {}");
 }
 
 #[test]
@@ -108,40 +181,6 @@ fn rejects_duplicate_attributes() {
 }
 
 #[test]
-fn rejects_invalid_child_placement() {
-    let error = parse(r#"(doc {:meta {:version "0.1.0"}} (p (ul (li (p "x")))))"#)
-        .expect_err("block inside inline context is rejected");
-
-    assert!(matches!(
-        error.kind,
-        ParseErrorKind::InvalidChild { parent, child } if parent == "p" && child == "ul"
-    ));
-}
-
-#[test]
-fn rejects_invalid_codeblock_shape() {
-    let error = parse(r#"(doc {:meta {:version "0.1.0"}} (codeblock "a" "b"))"#)
-        .expect_err("codeblock requires exactly one text child");
-
-    assert!(matches!(
-        error.kind,
-        ParseErrorKind::UnexpectedToken { .. } | ParseErrorKind::InvalidChild { .. }
-    ));
-}
-
-#[test]
-fn rejects_nested_links() {
-    let error =
-        parse(r#"(doc {:meta {:version "0.1.0"}} (p (a {:href "/"} (a {:href "/x"} "x"))))"#)
-            .expect_err("nested links are rejected");
-
-    assert!(matches!(
-        error.kind,
-        ParseErrorKind::InvalidChild { parent, child } if parent == "a" && child == "a"
-    ));
-}
-
-#[test]
 fn propagates_lexer_errors() {
     let error = parse("(doc @)").expect_err("lexer error is propagated");
 
@@ -149,33 +188,55 @@ fn propagates_lexer_errors() {
 }
 
 #[test]
-fn parses_inline_fragment() {
-    let inline = parse_inline_fragment(r#"(code "lightdown")"#).expect("inline fragment parses");
+fn parses_expression_fragment() {
+    let expr = parse_expr_fragment(r#"(code "lightdown")"#).expect("expression fragment parses");
 
-    assert!(matches!(inline.kind, InlineKind::Code(ref text) if text == "lightdown"));
+    assert_call_name(&expr, "code");
+    let args = call_args(&expr);
+    assert_eq!(args.len(), 1);
+    assert_string(&args[0], "lightdown");
 }
 
 #[test]
-fn rejects_extra_input_after_inline_fragment() {
-    let error =
-        parse_inline_fragment(r#"(code "x") "y""#).expect_err("extra input is rejected");
+fn rejects_extra_input_after_expression_fragment() {
+    let error = parse_expr_fragment(r#"(code "x") "y""#).expect_err("extra input is rejected");
 
     assert!(matches!(error.kind, ParseErrorKind::ExtraInput));
 }
 
-#[test]
-fn parses_table_with_direct_rows() {
-    let document = parse(indoc::indoc! {r#"
-        (doc {:meta {:version "0.1.0"}}
-          (table
-            (tr (th "Company"))
-            (tr (td "Alfreds Futterkiste"))))
-    "#})
-    .expect("table with direct rows parses");
-
-    let BlockKind::Table(children) = &document.blocks[0].kind else {
-        panic!("expected table");
+fn call_args(expr: &Expr) -> &[Expr] {
+    let ExprKind::Call { args, .. } = &expr.kind else {
+        panic!("expected call expression");
     };
-    assert!(matches!(children[0].kind, TableChildKind::Head(_)));
-    assert!(matches!(children[1].kind, TableChildKind::Body(_)));
+    args
+}
+
+fn assert_call_name(expr: &Expr, name: &str) {
+    let ExprKind::Call { callee, .. } = &expr.kind else {
+        panic!("expected call expression");
+    };
+    assert_symbol(callee, name);
+}
+
+fn assert_symbol(expr: &Expr, expected: &str) {
+    assert!(
+        matches!(&expr.kind, ExprKind::Symbol(name) if name == expected),
+        "expected symbol {expected:?}, got {:?}",
+        expr.kind
+    );
+}
+
+fn assert_string(expr: &Expr, expected: &str) {
+    assert!(
+        matches!(&expr.kind, ExprKind::String(value) if value == expected),
+        "expected string {expected:?}, got {:?}",
+        expr.kind
+    );
+}
+
+fn assert_text_call(expr: &Expr, expected: &str) {
+    assert_call_name(expr, "text");
+    let args = call_args(expr);
+    assert_eq!(args.len(), 1);
+    assert_string(&args[0], expected);
 }

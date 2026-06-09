@@ -192,10 +192,7 @@ impl<'a> BlockParser<'a> {
 
         let span = span_for_range(self.input, start, end);
         let paragraph = SourceBlock {
-            kind: SourceBlockKind::Paragraph(inline_parser::parse_inlines(
-                &parts.join(" "),
-                span,
-            )?),
+            kind: SourceBlockKind::Paragraph(inline_parser::parse_inlines(&parts.join(" "), span)?),
             span,
         };
 
