@@ -103,11 +103,8 @@ fn find_matching_bracket(source: &str, start: usize, span: Span) -> Result<usize
 }
 
 fn serialize_inline_sequence(inlines: &[Expr]) -> String {
-    inlines
-        .iter()
-        .map(serialize_expr)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let items = inlines.iter().map(serialize_expr).collect::<Vec<_>>().join(" ");
+    format!("(list {items})")
 }
 
 fn serialize_expr(expr: &Expr) -> String {

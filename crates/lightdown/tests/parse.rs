@@ -109,10 +109,12 @@ fn parses_embedded_ir_with_nested_lightdown_fragment() {
         .iter()
         .find(|expr| is_named_call(expr, "a"))
         .expect("embedded link exists");
+    let link_children = &call_args(link)[1];
 
     assert_string(&call_args(link)[0], "https://example.com");
+    assert_call_name(link_children, "list");
     assert!(matches!(
-        &call_args(link)[1].kind,
+        &call_args(link_children)[0].kind,
         ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Symbol(name) if name == "code")
     ));
 }

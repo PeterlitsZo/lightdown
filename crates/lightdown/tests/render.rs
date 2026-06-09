@@ -61,3 +61,22 @@ fn renders_list_map_and_apply_through_author_pipeline() {
         "<table><thead><tr><th>Foo</th><th>Bar</th></tr></thead></table>"
     );
 }
+
+#[test]
+fn ignores_whitespace_between_nested_lightdown_fragments_in_embedded_ir_lists() {
+    let input = indoc::indoc! {r#"
+        \(table
+          (thead
+            (apply tr (map th (list [Hello]     [World] [Do **YOU** know Lightdown?]))))
+          (tbody
+            (apply tr (map td (list [Peterlist] [Zo]    [Yes])))
+            (apply tr (map td (list [Liu]       [Zilu]  [No])))))
+    "#};
+    let html =
+        lightdown::render_html(input).expect("author pipeline renders whitespace-separated list");
+
+    assert_eq!(
+        html,
+        "<table><thead><tr><th>Hello</th><th>World</th><th>Do <strong>YOU</strong> know Lightdown?</th></tr></thead><tbody><tr><td>Peterlist</td><td>Zo</td><td>Yes</td></tr><tr><td>Liu</td><td>Zilu</td><td>No</td></tr></tbody></table>"
+    );
+}

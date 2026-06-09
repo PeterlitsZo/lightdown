@@ -467,9 +467,11 @@ fn expect_inlines(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Vec<NodeValue>, VmError> {
-    args.into_iter()
-        .map(|value| expect_node_kind(builtin, value, "inline", span))
-        .collect()
+    let mut inlines = Vec::new();
+    for value in args {
+        collect_inline_nodes(builtin, value, span, &mut inlines)?;
+    }
+    Ok(inlines)
 }
 
 fn expect_rows(builtin: Builtin, args: Vec<Value>, span: Span) -> Result<Vec<NodeValue>, VmError> {
@@ -505,6 +507,38 @@ fn expect_node_kind(
         other => Err(VmError::BuiltinTypeMismatch {
             builtin: builtin.name(),
             expected,
+            found: other.kind_name(),
+            span,
+        }),
+    }
+}
+
+fn collect_inline_nodes(
+    builtin: Builtin,
+    value: Value,
+    span: Span,
+    output: &mut Vec<NodeValue>,
+) -> Result<(), VmError> {
+    match value {
+        Value::Node(NodeValue::Inline(inline)) => {
+            output.push(NodeValue::Inline(inline));
+            Ok(())
+        }
+        Value::List(values) => {
+            for value in values {
+                collect_inline_nodes(builtin, value, span, output)?;
+            }
+            Ok(())
+        }
+        Value::Node(node) => Err(VmError::BuiltinTypeMismatch {
+            builtin: builtin.name(),
+            expected: "inline",
+            found: node.kind_name(),
+            span,
+        }),
+        other => Err(VmError::BuiltinTypeMismatch {
+            builtin: builtin.name(),
+            expected: "inline",
             found: other.kind_name(),
             span,
         }),
