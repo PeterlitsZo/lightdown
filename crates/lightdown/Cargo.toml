@@ -1,0 +1,15 @@
+[package]
+name = "lightdown"
+version = "0.1.0"
+edition = "2024"
+description = "Author-facing Lightdown parser."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+lightdown-html = { path = "../lightdown-html" }
+lightdown-ir = { path = "../lightdown-ir" }
+
+[dev-dependencies]
+indoc = "2.0.7"

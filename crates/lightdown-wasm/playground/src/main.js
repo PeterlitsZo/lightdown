@@ -2,8 +2,11 @@ import "./style.css";
 
 import init, { renderToHtml } from "../../pkg/lightdown_wasm.js";
 
-const SAMPLE_INPUT = `(doc {:meta {:version "0.1.0"}}
-  (h1 "Hello"))`;
+const SAMPLE_INPUT = `# Foobar
+
+## Barfoo
+
+Do you know \\(a {:href "https://example.com"} [\`lightdown\`])? \`lightdown\` is good.`;
 
 const sourceInput = document.querySelector("#sourceInput");
 const statusBadge = document.querySelector("#statusBadge");

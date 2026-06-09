@@ -1,4 +1,7 @@
-use lightdown_ir::{BlockKind, InlineKind, ParseErrorKind, TableCellKind, TableChildKind, parse};
+use lightdown_ir::{
+    BlockKind, InlineKind, ParseErrorKind, TableCellKind, TableChildKind, parse,
+    parse_inline_fragment,
+};
 
 #[test]
 fn parses_minimal_document_with_nested_metadata_map() {
@@ -143,4 +146,36 @@ fn propagates_lexer_errors() {
     let error = parse("(doc @)").expect_err("lexer error is propagated");
 
     assert!(matches!(error.kind, ParseErrorKind::Lex(_)));
+}
+
+#[test]
+fn parses_inline_fragment() {
+    let inline = parse_inline_fragment(r#"(code "lightdown")"#).expect("inline fragment parses");
+
+    assert!(matches!(inline.kind, InlineKind::Code(ref text) if text == "lightdown"));
+}
+
+#[test]
+fn rejects_extra_input_after_inline_fragment() {
+    let error =
+        parse_inline_fragment(r#"(code "x") "y""#).expect_err("extra input is rejected");
+
+    assert!(matches!(error.kind, ParseErrorKind::ExtraInput));
+}
+
+#[test]
+fn parses_table_with_direct_rows() {
+    let document = parse(indoc::indoc! {r#"
+        (doc {:meta {:version "0.1.0"}}
+          (table
+            (tr (th "Company"))
+            (tr (td "Alfreds Futterkiste"))))
+    "#})
+    .expect("table with direct rows parses");
+
+    let BlockKind::Table(children) = &document.blocks[0].kind else {
+        panic!("expected table");
+    };
+    assert!(matches!(children[0].kind, TableChildKind::Head(_)));
+    assert!(matches!(children[1].kind, TableChildKind::Body(_)));
 }

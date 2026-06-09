@@ -10,6 +10,10 @@ pub fn parse(input: &str) -> Result<Document, ParseError> {
     Parser::new(Lexer::new(input))?.parse_document()
 }
 
+pub fn parse_inline_fragment(input: &str) -> Result<Inline, ParseError> {
+    Parser::new(Lexer::new(input))?.parse_inline_fragment()
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
@@ -36,6 +40,17 @@ impl Parser {
             ));
         }
         Ok(document)
+    }
+
+    pub fn parse_inline_fragment(mut self) -> Result<Inline, ParseError> {
+        let inline = self.parse_inline("fragment", false)?;
+        if let Some(token) = self.peek() {
+            return Err(ParseError::new(
+                ParseErrorKind::ExtraInput,
+                Some(token.span),
+            ));
+        }
+        Ok(inline)
     }
 
     fn parse_doc_node(&mut self) -> Result<Document, ParseError> {
@@ -408,6 +423,7 @@ impl Parser {
         let mut children = Vec::new();
         let mut seen_head = false;
         let mut seen_body = false;
+        let mut direct_rows = Vec::new();
 
         while !self.at_shape(TokenShape::RParen) {
             let start = self.expect_kind(TokenShape::LParen)?.span.start;
@@ -428,6 +444,15 @@ impl Parser {
                     TableChildKind::Head(self.parse_table_rows("thead")?)
                 }
                 "tbody" => {
+                    if !direct_rows.is_empty() {
+                        return Err(ParseError::new(
+                            ParseErrorKind::InvalidChild {
+                                parent: "table".into(),
+                                child: "tbody".into(),
+                            },
+                            Some(name.span),
+                        ));
+                    }
                     if seen_body {
                         return Err(ParseError::new(
                             ParseErrorKind::InvalidChild {
@@ -441,6 +466,20 @@ impl Parser {
                     self.reject_attribute_map_if_present("tbody")?;
                     TableChildKind::Body(self.parse_table_rows("tbody")?)
                 }
+                "tr" => {
+                    if seen_head || seen_body {
+                        return Err(ParseError::new(
+                            ParseErrorKind::InvalidChild {
+                                parent: "table".into(),
+                                child: "tr".into(),
+                            },
+                            Some(name.span),
+                        ));
+                    }
+                    let row = self.parse_table_row(start, "table")?;
+                    direct_rows.push(row);
+                    continue;
+                }
                 other => {
                     return Err(ParseError::new(
                         ParseErrorKind::InvalidChild {
@@ -453,6 +492,10 @@ impl Parser {
             };
             let end = self.expect_kind(TokenShape::RParen)?.span.end;
             children.push(Node::new(kind, Span { start, end }));
+        }
+
+        if !direct_rows.is_empty() {
+            return Ok(normalize_direct_table_rows(direct_rows));
         }
 
         Ok(children)
@@ -472,22 +515,7 @@ impl Parser {
                     Some(name.span),
                 ));
             }
-            self.reject_attribute_map_if_present("tr")?;
-            let cells = self.parse_table_cells()?;
-            if cells.is_empty() {
-                return Err(ParseError::new(
-                    ParseErrorKind::MissingChild {
-                        parent: "tr".into(),
-                        expected: "th or td",
-                    },
-                    Some(Span {
-                        start,
-                        end: self.current_end(start),
-                    }),
-                ));
-            }
-            let end = self.expect_kind(TokenShape::RParen)?.span.end;
-            rows.push(Node::new(TableRowKind { cells }, Span { start, end }));
+            rows.push(self.parse_table_row(start, parent)?);
         }
         if rows.is_empty() {
             return Err(ParseError::new(
@@ -499,6 +527,26 @@ impl Parser {
             ));
         }
         Ok(rows)
+    }
+
+    fn parse_table_row(&mut self, start: crate::Position, parent: &str) -> Result<TableRow, ParseError> {
+        self.reject_attribute_map_if_present("tr")?;
+        let cells = self.parse_table_cells()?;
+        if cells.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorKind::MissingChild {
+                    parent: "tr".into(),
+                    expected: "th or td",
+                },
+                Some(Span {
+                    start,
+                    end: self.current_end(start),
+                }),
+            ));
+        }
+        let end = self.expect_kind(TokenShape::RParen)?.span.end;
+        let _ = parent;
+        Ok(Node::new(TableRowKind { cells }, Span { start, end }))
     }
 
     fn parse_table_cells(&mut self) -> Result<Vec<TableCell>, ParseError> {
@@ -981,6 +1029,43 @@ pub enum ParseErrorKind {
         attribute: String,
         expected: &'static str,
     },
+}
+
+fn normalize_direct_table_rows(rows: Vec<TableRow>) -> Vec<TableChild> {
+    let head_len = rows
+        .iter()
+        .take_while(|row| {
+            row.kind
+                .cells
+                .iter()
+                .all(|cell| matches!(cell.kind, TableCellKind::Header(_)))
+        })
+        .count();
+
+    let mut children = Vec::new();
+    if head_len > 0 {
+        let span = Span {
+            start: rows[0].span.start,
+            end: rows[head_len - 1].span.end,
+        };
+        children.push(Node::new(
+            TableChildKind::Head(rows[..head_len].to_vec()),
+            span,
+        ));
+    }
+
+    if head_len < rows.len() {
+        let span = Span {
+            start: rows[head_len].span.start,
+            end: rows[rows.len() - 1].span.end,
+        };
+        children.push(Node::new(
+            TableChildKind::Body(rows[head_len..].to_vec()),
+            span,
+        ));
+    }
+
+    children
 }
 
 fn is_block_node(name: &str) -> bool {

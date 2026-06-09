@@ -24,6 +24,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightdown"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "lightdown-html",
+ "lightdown-ir",
+]
+
+[[package]]
 name = "lightdown-html"
 version = "0.1.0"
 dependencies = [
@@ -41,7 +50,7 @@ dependencies = [
 name = "lightdown-wasm"
 version = "0.1.0"
 dependencies = [
- "lightdown-html",
+ "lightdown",
  "wasm-bindgen",
 ]
 

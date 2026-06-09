@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-lightdown-html = { path = "../lightdown-html" }
+lightdown = { path = "../lightdown" }
 wasm-bindgen = "0.2.100"
 
 [package.metadata.wasm-pack.profile.release]

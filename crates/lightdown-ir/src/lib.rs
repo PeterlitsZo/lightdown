@@ -7,4 +7,4 @@ pub use ast::{
     TableCellKind, TableChild, TableChildKind, TableRow, TableRowKind,
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Position, Span, Token, TokenKind};
-pub use parser::{ParseError, ParseErrorKind, Parser, parse};
+pub use parser::{ParseError, ParseErrorKind, Parser, parse, parse_inline_fragment};

@@ -54,7 +54,7 @@ import init, { renderToHtml } from "./pkg/lightdown_wasm.js";
 
 await init();
 
-const html = renderToHtml(`(doc
-  {:meta {:version "0.1.0"}}
-  (p "Hello"))`);
+const html = renderToHtml(`# Hello
+
+Use \`lightdown\`.`);
 ```
