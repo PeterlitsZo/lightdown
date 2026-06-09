@@ -1,0 +1,16 @@
+[package]
+name = "lightdown-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for Lightdown."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+lightdown-html = { path = "../lightdown-html" }
+wasm-bindgen = "0.2.100"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

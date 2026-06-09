@@ -1,1 +1,6 @@
 /target
+/crates/lightdown-wasm/pkg
+/crates/lightdown-wasm/playground/node_modules
+/crates/lightdown-wasm/playground/dist
+/.claude/
+/.agents/

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lightdown Playground</title>
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <main class="workspace">
+      <section class="editor-pane">
+        <textarea
+          id="sourceInput"
+          spellcheck="false"
+          aria-label="Lightdown IR source"
+        ></textarea>
+      </section>
+
+      <div class="workspace-divider" aria-hidden="true"></div>
+
+      <section class="result-pane">
+        <div class="toolbar">
+          <div class="tabs" role="tablist" aria-label="Result view">
+            <button
+              id="previewTab"
+              class="tab is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="previewPanel"
+              data-tab="preview"
+            >
+              Preview
+            </button>
+            <button
+              id="outputTab"
+              class="tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="outputPanel"
+              data-tab="output"
+            >
+              Source
+            </button>
+          </div>
+        </div>
+
+        <div class="result-body">
+          <section
+            id="previewPanel"
+            class="result-panel preview-panel is-active"
+            role="tabpanel"
+            aria-labelledby="previewTab"
+          ></section>
+
+          <pre
+            id="outputPanel"
+            class="result-panel output-panel"
+            role="tabpanel"
+            aria-labelledby="outputTab"
+            hidden
+          ><code id="outputCode"></code></pre>
+        </div>
+      </section>
+    </main>
+
+    <div class="visually-hidden" aria-live="polite">
+      <span id="statusBadge" data-state="loading">Loading wasm</span>
+      <span id="resultBadge" data-state="loading">Waiting for wasm</span>
+    </div>
+  </body>
+</html>
