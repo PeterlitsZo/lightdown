@@ -1,5 +1,6 @@
 import "./style.css";
 
+import * as monaco from "monaco-editor";
 import init, { renderToHtml } from "../../pkg/lightdown_wasm.js";
 
 const SAMPLE_INPUT = `# Foobar
@@ -8,7 +9,7 @@ const SAMPLE_INPUT = `# Foobar
 
 Do you know \\(a {:href "https://example.com"} [\`lightdown\`])? \`lightdown\` is good.`;
 
-const sourceInput = document.querySelector("#sourceInput");
+const sourceEditor = document.querySelector("#sourceEditor");
 const statusBadge = document.querySelector("#statusBadge");
 const resultBadge = document.querySelector("#resultBadge");
 const outputCode = document.querySelector("#outputCode");
@@ -20,9 +21,16 @@ const panels = {
 };
 
 let activeTab = "preview";
-
-sourceInput.value = SAMPLE_INPUT;
-sourceInput.disabled = true;
+const editor = monaco.editor.create(sourceEditor, {
+  automaticLayout: true,
+  language: "plaintext",
+  minimap: { enabled: false },
+  readOnly: true,
+  scrollBeyondLastLine: false,
+  tabSize: 2,
+  theme: "vs",
+  value: SAMPLE_INPUT,
+});
 
 for (const tab of tabs) {
   tab.addEventListener("click", () => {
@@ -30,7 +38,7 @@ for (const tab of tabs) {
   });
 }
 
-sourceInput.addEventListener("input", () => {
+editor.onDidChangeModelContent(() => {
   renderSource();
 });
 
@@ -39,10 +47,10 @@ boot();
 async function boot() {
   try {
     await init();
-    sourceInput.disabled = false;
+    editor.updateOptions({ readOnly: false });
     setBadge(statusBadge, "ready", "Wasm ready");
     renderSource();
-    sourceInput.focus();
+    editor.focus();
   } catch (error) {
     const message = describeError(error);
     setBadge(statusBadge, "error", "Wasm failed");
@@ -52,7 +60,7 @@ async function boot() {
 
 function renderSource() {
   try {
-    const html = renderToHtml(sourceInput.value);
+    const html = renderToHtml(editor.getValue());
     outputCode.textContent = html;
     previewPanel.innerHTML = html;
     setBadge(resultBadge, "success", "Rendered");
