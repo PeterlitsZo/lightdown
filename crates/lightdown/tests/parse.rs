@@ -138,6 +138,35 @@ fn parses_block_embedded_ir_table_with_list_map_apply() {
     assert_call_name(&call_args(apply)[1], "map");
 }
 
+#[test]
+fn parses_embedded_ir_with_let_and_lambda() {
+    let input = indoc::indoc! {r#"
+        \(let
+          ((headers (list [Company] [Description]))
+           (make-row
+             (lambda (cell-maker cells)
+               [ignored]
+               (apply tr (map cell-maker cells)))))
+          (table
+            (thead
+              (make-row th headers))))
+    "#};
+
+    let module = lightdown::parse(input).expect("block embedded ir parses");
+    let let_call = &call_args(&module.body)[0];
+
+    let ExprKind::Call { callee, args } = &let_call.kind else {
+        panic!("expected lowered let call");
+    };
+    assert_eq!(args.len(), 2);
+    let ExprKind::Lambda { params, body } = &callee.kind else {
+        panic!("expected lambda from let lowering");
+    };
+    assert_eq!(params, &["headers".to_string(), "make-row".to_string()]);
+    assert_eq!(body.len(), 1);
+    assert_call_name(&body[0], "table");
+}
+
 fn call_args(expr: &Expr) -> &[Expr] {
     let ExprKind::Call { args, .. } = &expr.kind else {
         panic!("expected call expression");

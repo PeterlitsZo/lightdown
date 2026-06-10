@@ -30,9 +30,11 @@ pub fn lower_blocks(blocks: Vec<SourceBlock>) -> Result<Vec<Expr>, ParseError> {
 fn lower_block(block: SourceBlock) -> Result<Expr, ParseError> {
     let span = block.span;
     match block.kind {
-        SourceBlockKind::Heading { level, inlines } => {
-            Ok(call_expr(format!("h{level}"), lower_inlines(inlines)?, span))
-        }
+        SourceBlockKind::Heading { level, inlines } => Ok(call_expr(
+            format!("h{level}"),
+            lower_inlines(inlines)?,
+            span,
+        )),
         SourceBlockKind::Paragraph(inlines) => Ok(call_expr("p", lower_inlines(inlines)?, span)),
         SourceBlockKind::EmbeddedIr(source) => embedded_ir::lower_block_fragment(source, span),
         SourceBlockKind::List { ordered, items } => {

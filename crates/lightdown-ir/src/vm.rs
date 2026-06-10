@@ -1,13 +1,46 @@
 use crate::Span;
-use crate::builtins::{call_callable, resolve_builtin};
+use crate::builtins::{call_builtin, resolve_builtin};
 use crate::bytecode::{Constant, ConstantId, Function, FunctionId, Instruction, Opcode, Program};
 use crate::document::Document;
-use crate::runtime::{
-    CallableValue, DecodeError, MetadataValue, NodeValue, Value,
-};
+use crate::runtime::{CallableValue, ClosureValue, DecodeError, MetadataValue, NodeValue, Value};
 
 pub fn execute_program(program: &Program) -> Result<Value, VmError> {
     Vm::new(program).execute()
+}
+
+pub(crate) fn execute_closure(
+    program: &Program,
+    closure: ClosureValue,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, VmError> {
+    let function = program
+        .functions
+        .get(usize::from(closure.function.0))
+        .ok_or(VmError::InvalidFunctionIndex {
+            index: closure.function,
+            span,
+        })?;
+    if usize::from(function.arity) != args.len() {
+        return Err(VmError::ClosureArityMismatch {
+            function: closure.function,
+            expected: function.arity,
+            actual: u16::try_from(args.len()).unwrap_or(u16::MAX),
+            span,
+        });
+    }
+
+    Vm {
+        program,
+        stack: Vec::new(),
+        frames: vec![CallFrame::with_locals(
+            closure.function,
+            function.locals,
+            closure.captures,
+            args,
+        )?],
+    }
+    .execute()
 }
 
 pub fn execute_document(program: &Program) -> Result<Document, VmError> {
@@ -60,7 +93,8 @@ impl<'a> Vm<'a> {
                             span: instruction.span,
                         });
                     };
-                    self.stack.push(Value::Callable(CallableValue::Builtin(builtin)));
+                    self.stack
+                        .push(Value::Callable(CallableValue::Builtin(builtin)));
                 }
                 Opcode::LoadLocal { slot } => {
                     let value = self
@@ -69,6 +103,18 @@ impl<'a> Vm<'a> {
                         .get(usize::from(slot))
                         .cloned()
                         .ok_or(VmError::InvalidLocalSlot {
+                            slot,
+                            span: instruction.span,
+                        })?;
+                    self.stack.push(value);
+                }
+                Opcode::LoadCapture { slot } => {
+                    let value = self
+                        .current_frame()
+                        .captures
+                        .get(usize::from(slot))
+                        .cloned()
+                        .ok_or(VmError::InvalidCaptureSlot {
                             slot,
                             span: instruction.span,
                         })?;
@@ -86,6 +132,24 @@ impl<'a> Vm<'a> {
                         })?;
                     *local = value;
                 }
+                Opcode::MakeClosure { function, captures } => {
+                    let function_def = self.function(function, instruction.span)?;
+                    if function_def.captures != captures {
+                        return Err(VmError::ClosureCaptureMismatch {
+                            function,
+                            expected: function_def.captures,
+                            actual: captures,
+                            span: instruction.span,
+                        });
+                    }
+                    let captures =
+                        self.pop_many(usize::from(captures), "MakeClosure", instruction.span)?;
+                    self.stack
+                        .push(Value::Callable(CallableValue::Closure(ClosureValue {
+                            function,
+                            captures,
+                        })));
+                }
                 Opcode::Call { argc } => {
                     let args = self.pop_many(usize::from(argc), "Call", instruction.span)?;
                     let callee = self.pop_value("Call", instruction.span)?;
@@ -96,16 +160,41 @@ impl<'a> Vm<'a> {
                             span: value_span(&callee).or(Some(instruction.span)),
                         });
                     };
-                    let result = call_callable(
-                        callable,
-                        args,
-                        instruction.span,
-                        &MetadataValue {
-                            version: self.program.version.clone(),
-                            span: self.program.metadata_span,
-                        },
-                    )?;
-                    self.stack.push(result);
+                    match callable {
+                        CallableValue::Builtin(builtin) => {
+                            let result = call_builtin(
+                                builtin,
+                                args,
+                                instruction.span,
+                                self.program,
+                                &MetadataValue {
+                                    version: self.program.version.clone(),
+                                    span: self.program.metadata_span,
+                                },
+                            )?;
+                            self.stack.push(result);
+                        }
+                        CallableValue::Closure(closure) => {
+                            let (arity, locals) = {
+                                let function = self.function(closure.function, instruction.span)?;
+                                (function.arity, function.locals)
+                            };
+                            if usize::from(arity) != args.len() {
+                                return Err(VmError::ClosureArityMismatch {
+                                    function: closure.function,
+                                    expected: arity,
+                                    actual: argc,
+                                    span: instruction.span,
+                                });
+                            }
+                            self.frames.push(CallFrame::with_locals(
+                                closure.function,
+                                locals,
+                                closure.captures,
+                                args,
+                            )?);
+                        }
+                    }
                 }
                 Opcode::Return => {
                     let value = self.pop_value("Return", instruction.span)?;
@@ -238,6 +327,7 @@ pub struct CallFrame {
     pub function: FunctionId,
     pub ip: usize,
     pub locals: Vec<Value>,
+    pub captures: Vec<Value>,
 }
 
 impl CallFrame {
@@ -246,7 +336,33 @@ impl CallFrame {
             function,
             ip: 0,
             locals: vec![Value::Unit; usize::from(locals)],
+            captures: Vec::new(),
         }
+    }
+
+    fn with_locals(
+        function: FunctionId,
+        locals: u16,
+        captures: Vec<Value>,
+        args: Vec<Value>,
+    ) -> Result<Self, VmError> {
+        if args.len() > usize::from(locals) {
+            return Err(VmError::TooManyLocals {
+                function,
+                locals,
+                actual: u16::try_from(args.len()).unwrap_or(u16::MAX),
+            });
+        }
+        let mut frame = Self {
+            function,
+            ip: 0,
+            locals: vec![Value::Unit; usize::from(locals)],
+            captures,
+        };
+        for (slot, value) in args.into_iter().enumerate() {
+            frame.locals[slot] = value;
+        }
+        Ok(frame)
     }
 }
 
@@ -265,6 +381,10 @@ pub enum VmError {
         span: Span,
     },
     InvalidLocalSlot {
+        slot: u16,
+        span: Span,
+    },
+    InvalidCaptureSlot {
         slot: u16,
         span: Span,
     },
@@ -298,6 +418,23 @@ pub enum VmError {
         found: &'static str,
         builtin: Option<&'static str>,
         span: Option<Span>,
+    },
+    ClosureArityMismatch {
+        function: FunctionId,
+        expected: u16,
+        actual: u16,
+        span: Span,
+    },
+    ClosureCaptureMismatch {
+        function: FunctionId,
+        expected: u16,
+        actual: u16,
+        span: Span,
+    },
+    TooManyLocals {
+        function: FunctionId,
+        locals: u16,
+        actual: u16,
     },
     BuiltinArityMismatch {
         builtin: &'static str,

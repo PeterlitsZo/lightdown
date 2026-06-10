@@ -198,6 +198,48 @@ fn parses_expression_fragment() {
 }
 
 #[test]
+fn parses_lambda_with_multiple_body_expressions() {
+    let expr = parse_expr_fragment(r#"(lambda (x y) (text "ignored") (list x y))"#)
+        .expect("lambda parses");
+
+    let ExprKind::Lambda { params, body } = &expr.kind else {
+        panic!("expected lambda expression");
+    };
+    assert_eq!(params, &["x".to_string(), "y".to_string()]);
+    assert_eq!(body.len(), 2);
+    assert_text_call(&body[0], "ignored");
+    assert_call_name(&body[1], "list");
+}
+
+#[test]
+fn parses_namespaced_symbols() {
+    let expr = parse_expr_fragment(r#"(ld::table::from-data (list (text "Foo")))"#)
+        .expect("expression fragment parses");
+
+    assert_call_name(&expr, "ld::table::from-data");
+}
+
+#[test]
+fn lowers_let_into_lambda_call() {
+    let expr = parse_expr_fragment(r#"(let ((x (text "Foo")) (y (text "Bar"))) (list x y))"#)
+        .expect("let parses");
+
+    let ExprKind::Call { callee, args } = &expr.kind else {
+        panic!("expected lowered call");
+    };
+    assert_eq!(args.len(), 2);
+    assert_text_call(&args[0], "Foo");
+    assert_text_call(&args[1], "Bar");
+
+    let ExprKind::Lambda { params, body } = &callee.kind else {
+        panic!("expected let to lower into lambda");
+    };
+    assert_eq!(params, &["x".to_string(), "y".to_string()]);
+    assert_eq!(body.len(), 1);
+    assert_call_name(&body[0], "list");
+}
+
+#[test]
 fn rejects_extra_input_after_expression_fragment() {
     let error = parse_expr_fragment(r#"(code "x") "y""#).expect_err("extra input is rejected");
 

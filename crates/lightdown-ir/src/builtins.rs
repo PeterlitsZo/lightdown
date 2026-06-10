@@ -1,9 +1,10 @@
 use crate::Span;
+use crate::bytecode::Program;
 use crate::runtime::{
     BlockValue, CallableValue, DocumentValue, InlineValue, MetadataValue, NodeValue,
     TableCellValue, TableChildValue, TableRowValue, Value,
 };
-use crate::vm::VmError;
+use crate::vm::{VmError, execute_closure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Builtin {
@@ -37,6 +38,7 @@ pub enum Builtin {
     List,
     Map,
     Apply,
+    LdTableFromData,
 }
 
 impl Builtin {
@@ -72,6 +74,7 @@ impl Builtin {
             Self::List => "list",
             Self::Map => "map",
             Self::Apply => "apply",
+            Self::LdTableFromData => "ld::table::from-data",
         }
     }
 }
@@ -108,25 +111,16 @@ pub(crate) fn resolve_builtin(name: &str) -> Option<Builtin> {
         "list" => Builtin::List,
         "map" => Builtin::Map,
         "apply" => Builtin::Apply,
+        "ld::table::from-data" => Builtin::LdTableFromData,
         _ => return None,
     })
 }
 
-pub(crate) fn call_callable(
-    callable: CallableValue,
-    args: Vec<Value>,
-    span: Span,
-    metadata: &MetadataValue,
-) -> Result<Value, VmError> {
-    match callable {
-        CallableValue::Builtin(builtin) => call_builtin(builtin, args, span, metadata),
-    }
-}
-
-fn call_builtin(
+pub(crate) fn call_builtin(
     builtin: Builtin,
     args: Vec<Value>,
     span: Span,
+    program: &Program,
     metadata: &MetadataValue,
 ) -> Result<Value, VmError> {
     match builtin {
@@ -185,8 +179,15 @@ fn call_builtin(
         }))),
         Builtin::Text => {
             expect_arity(builtin, &args, "1", span)?;
-            let text = expect_string(builtin, args.into_iter().next().expect("arity checked"), span)?;
-            Ok(Value::Node(NodeValue::Inline(InlineValue::Text { text, span })))
+            let text = expect_string(
+                builtin,
+                args.into_iter().next().expect("arity checked"),
+                span,
+            )?;
+            Ok(Value::Node(NodeValue::Inline(InlineValue::Text {
+                text,
+                span,
+            })))
         }
         Builtin::Em => Ok(Value::Node(NodeValue::Inline(InlineValue::Emphasis {
             children: expect_inlines(builtin, args, span)?,
@@ -198,8 +199,15 @@ fn call_builtin(
         }))),
         Builtin::Code => {
             expect_arity(builtin, &args, "1", span)?;
-            let text = expect_string(builtin, args.into_iter().next().expect("arity checked"), span)?;
-            Ok(Value::Node(NodeValue::Inline(InlineValue::Code { text, span })))
+            let text = expect_string(
+                builtin,
+                args.into_iter().next().expect("arity checked"),
+                span,
+            )?;
+            Ok(Value::Node(NodeValue::Inline(InlineValue::Code {
+                text,
+                span,
+            })))
         }
         Builtin::A => link(args, span, builtin),
         Builtin::Img => image(args, span, builtin),
@@ -208,8 +216,9 @@ fn call_builtin(
             Ok(Value::Node(NodeValue::Inline(InlineValue::Break { span })))
         }
         Builtin::List => Ok(Value::List(args)),
-        Builtin::Map => map_builtin(args, span, metadata),
-        Builtin::Apply => apply_builtin(args, span, metadata),
+        Builtin::Map => map_builtin(args, span, program, metadata),
+        Builtin::Apply => apply_builtin(args, span, program, metadata),
+        Builtin::LdTableFromData => table_from_data(args, span, builtin),
     }
 }
 
@@ -306,6 +315,66 @@ fn table(args: Vec<Value>, span: Span, builtin: Builtin) -> Result<Value, VmErro
     })))
 }
 
+fn table_from_data(args: Vec<Value>, span: Span, builtin: Builtin) -> Result<Value, VmError> {
+    if args.is_empty() {
+        return Err(VmError::BuiltinArityMismatch {
+            builtin: builtin.name(),
+            expected: "at least 1",
+            actual: 0,
+            span,
+        });
+    }
+
+    let mut args = args.into_iter();
+    let header_cells = expect_list(builtin.name(), args.next().expect("length checked"), span)?;
+    let header_row = make_table_row(builtin, header_cells, true, span)?;
+
+    let mut children = vec![NodeValue::TableChild(TableChildValue::Head {
+        rows: vec![header_row],
+        span,
+    })];
+
+    let mut body_rows = Vec::new();
+    for row in args {
+        let body_cells = expect_list(builtin.name(), row, span)?;
+        body_rows.push(make_table_row(builtin, body_cells, false, span)?);
+    }
+
+    if !body_rows.is_empty() {
+        children.push(NodeValue::TableChild(TableChildValue::Body {
+            rows: body_rows,
+            span,
+        }));
+    }
+
+    Ok(Value::Node(NodeValue::Block(BlockValue::Table {
+        children,
+        span,
+    })))
+}
+
+fn make_table_row(
+    builtin: Builtin,
+    values: Vec<Value>,
+    is_header: bool,
+    span: Span,
+) -> Result<NodeValue, VmError> {
+    let mut cells = Vec::with_capacity(values.len());
+    for value in values {
+        let mut children = Vec::new();
+        collect_inline_nodes(builtin, value, span, &mut children)?;
+
+        let cell = if is_header {
+            TableCellValue::Header { children, span }
+        } else {
+            TableCellValue::Data { children, span }
+        };
+        cells.push(NodeValue::TableCell(cell));
+    }
+
+    Ok(NodeValue::TableRow(TableRowValue { cells, span }))
+}
+
 fn link(args: Vec<Value>, span: Span, builtin: Builtin) -> Result<Value, VmError> {
     if args.is_empty() {
         return Err(VmError::BuiltinArityMismatch {
@@ -347,7 +416,12 @@ fn image(args: Vec<Value>, span: Span, builtin: Builtin) -> Result<Value, VmErro
     }
 }
 
-fn map_builtin(args: Vec<Value>, span: Span, metadata: &MetadataValue) -> Result<Value, VmError> {
+fn map_builtin(
+    args: Vec<Value>,
+    span: Span,
+    program: &Program,
+    metadata: &MetadataValue,
+) -> Result<Value, VmError> {
     expect_named_arity("map", &args, 2, span)?;
     let mut args = args.into_iter();
     let callable = expect_callable("map", args.next().expect("arity checked"), span)?;
@@ -355,7 +429,13 @@ fn map_builtin(args: Vec<Value>, span: Span, metadata: &MetadataValue) -> Result
 
     let mut mapped = Vec::with_capacity(list.len());
     for item in list {
-        mapped.push(call_callable(callable.clone(), vec![item], span, metadata)?);
+        mapped.push(call_callable(
+            callable.clone(),
+            vec![item],
+            span,
+            program,
+            metadata,
+        )?);
     }
     Ok(Value::List(mapped))
 }
@@ -363,13 +443,27 @@ fn map_builtin(args: Vec<Value>, span: Span, metadata: &MetadataValue) -> Result
 fn apply_builtin(
     args: Vec<Value>,
     span: Span,
+    program: &Program,
     metadata: &MetadataValue,
 ) -> Result<Value, VmError> {
     expect_named_arity("apply", &args, 2, span)?;
     let mut args = args.into_iter();
     let callable = expect_callable("apply", args.next().expect("arity checked"), span)?;
     let values = expect_list("apply", args.next().expect("arity checked"), span)?;
-    call_callable(callable, values, span, metadata)
+    call_callable(callable, values, span, program, metadata)
+}
+
+fn call_callable(
+    callable: CallableValue,
+    args: Vec<Value>,
+    span: Span,
+    program: &Program,
+    metadata: &MetadataValue,
+) -> Result<Value, VmError> {
+    match callable {
+        CallableValue::Builtin(builtin) => call_builtin(builtin, args, span, program, metadata),
+        CallableValue::Closure(closure) => execute_closure(program, closure, args, span),
+    }
 }
 
 fn expect_arity(
@@ -425,11 +519,7 @@ fn expect_string(builtin: Builtin, value: Value, span: Span) -> Result<String, V
     }
 }
 
-fn expect_list(
-    builtin: &'static str,
-    value: Value,
-    span: Span,
-) -> Result<Vec<Value>, VmError> {
+fn expect_list(builtin: &'static str, value: Value, span: Span) -> Result<Vec<Value>, VmError> {
     match value {
         Value::List(values) => Ok(values),
         other => Err(VmError::BuiltinTypeMismatch {
@@ -456,7 +546,11 @@ fn expect_callable(
     }
 }
 
-fn expect_blocks(builtin: Builtin, args: Vec<Value>, span: Span) -> Result<Vec<NodeValue>, VmError> {
+fn expect_blocks(
+    builtin: Builtin,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Vec<NodeValue>, VmError> {
     args.into_iter()
         .map(|value| expect_node_kind(builtin, value, "block", span))
         .collect()
@@ -480,11 +574,7 @@ fn expect_rows(builtin: Builtin, args: Vec<Value>, span: Span) -> Result<Vec<Nod
         .collect()
 }
 
-fn expect_cells(
-    builtin: Builtin,
-    args: Vec<Value>,
-    span: Span,
-) -> Result<Vec<NodeValue>, VmError> {
+fn expect_cells(builtin: Builtin, args: Vec<Value>, span: Span) -> Result<Vec<NodeValue>, VmError> {
     args.into_iter()
         .map(|value| expect_node_kind(builtin, value, "table cell", span))
         .collect()
@@ -546,20 +636,22 @@ fn collect_inline_nodes(
 }
 
 fn normalize_direct_table_rows(rows: Vec<NodeValue>) -> Vec<NodeValue> {
-    let head_len = rows
-        .iter()
-        .take_while(|row| match row {
-            NodeValue::TableRow(row) => row.cells.iter().all(|cell| {
-                matches!(cell, NodeValue::TableCell(TableCellValue::Header { .. }))
-            }),
-            _ => false,
-        })
-        .count();
+    let head_len =
+        rows.iter()
+            .take_while(|row| match row {
+                NodeValue::TableRow(row) => row.cells.iter().all(|cell| {
+                    matches!(cell, NodeValue::TableCell(TableCellValue::Header { .. }))
+                }),
+                _ => false,
+            })
+            .count();
 
     let mut children = Vec::new();
     if head_len > 0 {
         let span = node_span(&rows[0]).expect("table row has span");
-        let end = node_span(&rows[head_len - 1]).expect("table row has span").end;
+        let end = node_span(&rows[head_len - 1])
+            .expect("table row has span")
+            .end;
         children.push(NodeValue::TableChild(TableChildValue::Head {
             rows: rows[..head_len].to_vec(),
             span: Span {

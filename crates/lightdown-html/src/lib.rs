@@ -2,8 +2,8 @@ use std::fmt;
 
 use lightdown_ir::{
     Block, BlockKind, CompileError, Document, Inline, InlineKind, ParseError, TableCell,
-    TableCellKind, TableChild, TableChildKind, TableRow, VmError, compile_module,
-    execute_document, parse,
+    TableCellKind, TableChild, TableChildKind, TableRow, VmError, compile_module, execute_document,
+    parse,
 };
 
 pub fn render(input: &str) -> Result<String, RenderError> {

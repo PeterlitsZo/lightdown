@@ -32,5 +32,12 @@ pub enum ExprKind {
     String(String),
     Bool(bool),
     Symbol(String),
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    Lambda {
+        params: Vec<String>,
+        body: Vec<Expr>,
+    },
 }

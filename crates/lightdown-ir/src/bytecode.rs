@@ -14,6 +14,7 @@ pub struct Function {
     pub name: String,
     pub arity: u16,
     pub locals: u16,
+    pub captures: u16,
     pub instructions: Vec<Instruction>,
 }
 
@@ -40,7 +41,9 @@ pub enum Opcode {
     PushConst { id: ConstantId },
     LoadBuiltin { name: ConstantId },
     LoadLocal { slot: u16 },
+    LoadCapture { slot: u16 },
     StoreLocal { slot: u16 },
+    MakeClosure { function: FunctionId, captures: u16 },
     Call { argc: u16 },
     Return,
     Jump { target: usize },

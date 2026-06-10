@@ -1,6 +1,7 @@
 use crate::Span;
 use crate::ast::Node;
 use crate::builtins::Builtin;
+use crate::bytecode::FunctionId;
 use crate::document::{
     Block, BlockKind, Document, DocumentMetadata, Inline, InlineKind, TableCell, TableCellKind,
     TableChild, TableChildKind, TableRow, TableRowKind,
@@ -32,6 +33,13 @@ impl Value {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CallableValue {
     Builtin(Builtin),
+    Closure(ClosureValue),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClosureValue {
+    pub function: FunctionId,
+    pub captures: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -271,8 +279,14 @@ impl TableRowValue {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TableCellValue {
-    Header { children: Vec<NodeValue>, span: Span },
-    Data { children: Vec<NodeValue>, span: Span },
+    Header {
+        children: Vec<NodeValue>,
+        span: Span,
+    },
+    Data {
+        children: Vec<NodeValue>,
+        span: Span,
+    },
 }
 
 impl TableCellValue {
@@ -281,9 +295,7 @@ impl TableCellValue {
             Self::Header { children, span } => {
                 (TableCellKind::Header(decode_inlines(children)?), span)
             }
-            Self::Data { children, span } => {
-                (TableCellKind::Data(decode_inlines(children)?), span)
-            }
+            Self::Data { children, span } => (TableCellKind::Data(decode_inlines(children)?), span),
         };
 
         Ok(Node::new(kind, span))

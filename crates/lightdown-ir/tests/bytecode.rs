@@ -15,6 +15,7 @@ fn compiles_minimal_module_into_a_single_entry_function() {
     assert_eq!(program.functions.len(), 1);
     assert_eq!(program.functions[0].arity, 0);
     assert_eq!(program.functions[0].locals, 0);
+    assert_eq!(program.functions[0].captures, 0);
     assert_eq!(program.constants, vec![Constant::String("doc".into())]);
     assert_eq!(program.functions[0].instructions.len(), 3);
     assert_eq!(
@@ -95,7 +96,47 @@ fn compiles_list_map_and_apply_with_only_generic_call_opcodes() {
                 | Opcode::Return
         )
     }));
-    assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::Call { argc: 2 })));
+    assert!(
+        opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::Call { argc: 2 }))
+    );
+}
+
+#[test]
+fn compiles_lambda_closures_with_local_and_capture_loads() {
+    let module = parse(indoc::indoc! {r#"
+        (doc {:meta {:version "0.1.0"}}
+          ((lambda (header)
+             ((lambda (wrap)
+                (wrap header))
+              (lambda (value)
+                (th value))))
+           (text "Foo")))
+    "#})
+    .expect("module parses");
+
+    let program = compile_module(&module).expect("module compiles");
+
+    assert_eq!(program.functions.len(), 4);
+    assert!(
+        program.functions[0]
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction.opcode, Opcode::MakeClosure { .. }))
+    );
+    assert!(
+        program.functions[1..]
+            .iter()
+            .flat_map(|function| function.instructions.iter())
+            .any(|instruction| matches!(instruction.opcode, Opcode::LoadCapture { .. }))
+    );
+    assert!(
+        program.functions[1..]
+            .iter()
+            .flat_map(|function| function.instructions.iter())
+            .any(|instruction| matches!(instruction.opcode, Opcode::LoadLocal { .. }))
+    );
 }
 
 #[test]
@@ -112,9 +153,12 @@ fn reports_runtime_errors_for_unknown_builtin_and_non_callable_values() {
             name: "entry".into(),
             arity: 0,
             locals: 0,
+            captures: 0,
             instructions: vec![
                 Instruction {
-                    opcode: Opcode::LoadBuiltin { name: lightdown_ir::ConstantId(0) },
+                    opcode: Opcode::LoadBuiltin {
+                        name: lightdown_ir::ConstantId(0),
+                    },
                     span,
                 },
                 Instruction {
@@ -139,9 +183,12 @@ fn reports_runtime_errors_for_unknown_builtin_and_non_callable_values() {
             name: "entry".into(),
             arity: 0,
             locals: 0,
+            captures: 0,
             instructions: vec![
                 Instruction {
-                    opcode: Opcode::PushConst { id: lightdown_ir::ConstantId(0) },
+                    opcode: Opcode::PushConst {
+                        id: lightdown_ir::ConstantId(0),
+                    },
                     span,
                 },
                 Instruction {
@@ -155,7 +202,10 @@ fn reports_runtime_errors_for_unknown_builtin_and_non_callable_values() {
     .expect_err("calling non-callable value");
     assert!(matches!(
         calling_non_callable,
-        VmError::NonCallableValue { found: "string", .. }
+        VmError::NonCallableValue {
+            found: "string",
+            ..
+        }
     ));
 }
 

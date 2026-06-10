@@ -103,7 +103,11 @@ fn find_matching_bracket(source: &str, start: usize, span: Span) -> Result<usize
 }
 
 fn serialize_inline_sequence(inlines: &[Expr]) -> String {
-    let items = inlines.iter().map(serialize_expr).collect::<Vec<_>>().join(" ");
+    let items = inlines
+        .iter()
+        .map(serialize_expr)
+        .collect::<Vec<_>>()
+        .join(" ");
     format!("(list {items})")
 }
 
@@ -113,15 +117,26 @@ fn serialize_expr(expr: &Expr) -> String {
         ExprKind::Bool(true) => "true".to_string(),
         ExprKind::Bool(false) => "false".to_string(),
         ExprKind::Symbol(name) => name.clone(),
+        ExprKind::Lambda { params, body } => {
+            let params = params.join(" ");
+            let body = body
+                .iter()
+                .map(serialize_expr)
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("(lambda ({params}) {body})")
+        }
         ExprKind::Call { callee, args } => {
-            let ExprKind::Symbol(name) = &callee.kind else {
-                panic!("lowered inline expressions always use symbol callees");
-            };
+            let callee = serialize_expr(callee);
             if args.is_empty() {
-                format!("({name})")
+                format!("({callee})")
             } else {
-                let args = args.iter().map(serialize_expr).collect::<Vec<_>>().join(" ");
-                format!("({name} {args})")
+                let args = args
+                    .iter()
+                    .map(serialize_expr)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("({callee} {args})")
             }
         }
     }

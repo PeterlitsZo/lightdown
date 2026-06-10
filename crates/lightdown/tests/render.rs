@@ -80,3 +80,52 @@ fn ignores_whitespace_between_nested_lightdown_fragments_in_embedded_ir_lists() 
         "<table><thead><tr><th>Hello</th><th>World</th><th>Do <strong>YOU</strong> know Lightdown?</th></tr></thead><tbody><tr><td>Peterlist</td><td>Zo</td><td>Yes</td></tr><tr><td>Liu</td><td>Zilu</td><td>No</td></tr></tbody></table>"
     );
 }
+
+#[test]
+fn renders_let_and_lambda_through_author_pipeline() {
+    let input = indoc::indoc! {r#"
+        \(let
+          ((headers (list [Hello] [World] [Do you know Lightdown?]))
+           (rows
+             (list
+               (list [Peterlist] [Zo] [Yes])
+               (list [Zi] [Lu] [No])))
+           (make-row
+             (lambda (cell-maker cells)
+               [ignored]
+               (apply tr (map cell-maker cells)))))
+          (table
+            (thead
+              (make-row th headers))
+            (tbody
+              ((lambda (row)
+                 [ignored]
+                 (make-row td row))
+               (list [Peterlist] [Zo] [Yes]))
+              ((lambda (row)
+                 (make-row td row))
+               (list [Zi] [Lu] [No])))))
+    "#};
+    let html = lightdown::render_html(input).expect("author pipeline renders let/lambda");
+
+    assert_eq!(
+        html,
+        "<table><thead><tr><th>Hello</th><th>World</th><th>Do you know Lightdown?</th></tr></thead><tbody><tr><td>Peterlist</td><td>Zo</td><td>Yes</td></tr><tr><td>Zi</td><td>Lu</td><td>No</td></tr></tbody></table>"
+    );
+}
+
+#[test]
+fn renders_ld_table_from_data_through_author_pipeline() {
+    let input = indoc::indoc! {r#"
+        \(ld::table::from-data
+          (list [Foo]   [Bar])
+          (list [Row 1] [Row 1])
+          (list [Row 2] [Row 2]))
+    "#};
+    let html = lightdown::render_html(input).expect("author pipeline renders table helper");
+
+    assert_eq!(
+        html,
+        "<table><thead><tr><th>Foo</th><th>Bar</th></tr></thead><tbody><tr><td>Row 1</td><td>Row 1</td></tr><tr><td>Row 2</td><td>Row 2</td></tr></tbody></table>"
+    );
+}

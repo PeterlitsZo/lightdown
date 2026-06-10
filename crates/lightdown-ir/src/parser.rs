@@ -162,8 +162,29 @@ impl Parser {
 
     fn parse_call(&mut self) -> Result<Expr, ParseError> {
         let start = self.expect_kind(TokenShape::LParen)?.span.start;
-        let name = self.expect_symbol()?;
-        let mut args = self.parse_prefixed_args(name.value.as_str())?;
+        if let Some(Token {
+            kind: TokenKind::Symbol(name),
+            ..
+        }) = self.peek()
+        {
+            match name.as_str() {
+                "lambda" => {
+                    self.expect_symbol()?;
+                    return self.parse_lambda(start);
+                }
+                "let" => {
+                    self.expect_symbol()?;
+                    return self.parse_let(start);
+                }
+                _ => {}
+            }
+        }
+
+        let callee = self.parse_expr()?;
+        let mut args = match &callee.kind {
+            ExprKind::Symbol(name) => self.parse_prefixed_args(name)?,
+            _ => Vec::new(),
+        };
         while !self.at_shape(TokenShape::RParen) {
             args.push(self.parse_expr()?);
         }
@@ -171,11 +192,73 @@ impl Parser {
 
         Ok(Node::new(
             ExprKind::Call {
-                callee: Box::new(Node::new(ExprKind::Symbol(name.value), name.span)),
+                callee: Box::new(callee),
                 args,
             },
             Span { start, end },
         ))
+    }
+
+    fn parse_lambda(&mut self, start: crate::Position) -> Result<Expr, ParseError> {
+        self.expect_kind(TokenShape::LParen)?;
+        let mut params = Vec::new();
+        while !self.at_shape(TokenShape::RParen) {
+            params.push(self.expect_symbol()?.value);
+        }
+        self.expect_kind(TokenShape::RParen)?;
+
+        let body = self.parse_non_empty_body("lambda")?;
+        let end = self.expect_kind(TokenShape::RParen)?.span.end;
+
+        Ok(Node::new(
+            ExprKind::Lambda { params, body },
+            Span { start, end },
+        ))
+    }
+
+    fn parse_let(&mut self, start: crate::Position) -> Result<Expr, ParseError> {
+        self.expect_kind(TokenShape::LParen)?;
+        let mut params = Vec::new();
+        let mut args = Vec::new();
+
+        while !self.at_shape(TokenShape::RParen) {
+            self.expect_kind(TokenShape::LParen)?;
+            let binding = self.expect_symbol()?;
+            let value = self.parse_expr()?;
+            self.expect_kind(TokenShape::RParen)?;
+            params.push(binding.value);
+            args.push(value);
+        }
+        self.expect_kind(TokenShape::RParen)?;
+
+        let body = self.parse_non_empty_body("let")?;
+        let end = self.expect_kind(TokenShape::RParen)?.span.end;
+        let span = Span { start, end };
+
+        Ok(Node::new(
+            ExprKind::Call {
+                callee: Box::new(Node::new(ExprKind::Lambda { params, body }, span)),
+                args,
+            },
+            span,
+        ))
+    }
+
+    fn parse_non_empty_body(&mut self, parent: &str) -> Result<Vec<Expr>, ParseError> {
+        let mut body = Vec::new();
+        while !self.at_shape(TokenShape::RParen) {
+            body.push(self.parse_expr()?);
+        }
+        if body.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorKind::MissingChild {
+                    parent: parent.into(),
+                    expected: "expression",
+                },
+                self.peek().map(|token| token.span),
+            ));
+        }
+        Ok(body)
     }
 
     fn parse_prefixed_args(&mut self, node: &str) -> Result<Vec<Expr>, ParseError> {

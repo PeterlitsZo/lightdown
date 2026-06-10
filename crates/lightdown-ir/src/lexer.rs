@@ -565,7 +565,7 @@ fn is_identifier_start(ch: char) -> bool {
 }
 
 fn is_identifier_continue(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '-'
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == ':'
 }
 
 fn is_high_surrogate(value: u16) -> bool {

@@ -22,17 +22,16 @@ fn renders_fixture_cases() {
 
 #[test]
 fn renders_documents_via_the_bytecode_path() {
-    let document =
-        lightdown_ir::execute_document(
-            &lightdown_ir::compile_module(
-                &lightdown_ir::parse(
-                    r#"(doc {:meta {:version "0.1.0"}} (p (text "Rendered through bytecode.")))"#,
-                )
-                .expect("module parses"),
+    let document = lightdown_ir::execute_document(
+        &lightdown_ir::compile_module(
+            &lightdown_ir::parse(
+                r#"(doc {:meta {:version "0.1.0"}} (p (text "Rendered through bytecode.")))"#,
             )
-            .expect("module compiles"),
+            .expect("module parses"),
         )
-        .expect("program executes");
+        .expect("module compiles"),
+    )
+    .expect("program executes");
 
     let html = lightdown_html::render_document(&document).expect("document renders");
 
